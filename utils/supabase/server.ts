@@ -12,13 +12,25 @@ export async function createClient() {
                 getAll() {
                     return cookieStore.getAll();
                 },
+
                 setAll(cookiesToSet) {
                     try {
-                        cookiesToSet.forEach(({ name, value, options }) => {
-                            cookieStore.set(name, value, options);
-                        });
+                        cookiesToSet.forEach(
+                            ({
+                                 name,
+                                 value,
+                                 options,
+                             }) =>
+                                cookieStore.set(
+                                    name,
+                                    value,
+                                    options
+                                )
+                        );
                     } catch {
-                        // Server Components cannot always write cookies.
+                        // setAll can be called from a
+                        // Server Component where cookies
+                        // cannot be modified.
                     }
                 },
             },
