@@ -18,16 +18,18 @@ const MAX_CAPTION_ATTEMPTS = 3;
 function cleanCaption(text: string) {
     let caption = text.trim();
 
-    // Remove markdown/code fences if Gemini ever adds them
+    // Remove markdown/code fences if Gemini adds them
     caption = caption.replace(/^```(?:text)?/i, "");
     caption = caption.replace(/```$/i, "");
 
-    // Remove labels that Gemini sometimes adds
+    // Remove labels Gemini may add
     caption = caption.replace(/^caption\s*:\s*/i, "");
     caption = caption.replace(/^final caption\s*:\s*/i, "");
 
     // Remove surrounding quotation marks
-    caption = caption.replace(/^["“](.*)["”]$/s, "$1");
+    // [\s\S] is used instead of the /s flag so it works
+    // with older TypeScript / JavaScript targets.
+    caption = caption.replace(/^["“]([\s\S]*)["”]$/, "$1");
 
     return caption.trim();
 }
@@ -36,8 +38,8 @@ function looksLikeBadMemeLogic(caption: string) {
     const lower = caption.toLowerCase();
 
     /*
-     * These are common meme constructions that frequently create
-     * fake / backwards logic.
+     * These are common meme constructions that can create
+     * fake or backwards logic.
      *
      * Example:
      * "Can't miss lecture if you never show up."
@@ -88,7 +90,7 @@ DO NOT repeat their reasoning or structure.
             : "";
 
     return `
-You are writing ONE short meme caption for an image.
+You are writing ONE short meme caption for an uploaded image.
 
 The user gave this scenario or idea:
 
@@ -106,18 +108,22 @@ chronically-online Columbia University student living in New York City.
 IMPORTANT RULES:
 
 1. LOGIC COMES FIRST.
+
 The caption must make sense when read literally.
 
 2. Treat the user's scenario as factual.
+
 Do NOT contradict what the user told you.
 
 3. Preserve cause and effect.
+
 If the user's prompt says someone does X because of Y,
 do not reverse that relationship.
 
 4. DO NOT create fake logic just because it sounds like a meme.
 
 BAD EXAMPLE:
+
 User scenario:
 "A student skips lecture because the slides are already online."
 
@@ -133,7 +139,10 @@ BETTER:
 Another good direction:
 "CourseWorks posted the slides, so apparently I've graduated from attendance."
 
-5. Avoid these lazy meme structures unless they are genuinely logical:
+5. Avoid lazy meme structures unless they are genuinely logical.
+
+Avoid things like:
+
 - "Can't X if you never Y"
 - "Can't fail X if you never Y"
 - "Can't be late if..."
@@ -141,45 +150,57 @@ Another good direction:
 - meaningless cause-and-effect reversals
 
 6. Humor should come from:
+
 - exaggeration
 - relatability
 - irony
 - the person's facial expression
 - college life
-- Columbia / NYC culture when relevant
+- Columbia culture
+- NYC culture when relevant
 
 Humor should NOT come from a sentence that simply makes no sense.
 
-7. Pay attention to the image.
+7. Pay attention to the uploaded image.
+
 Use the person's or animal's expression, body language, or situation
 when it helps the joke.
 
-8. Do not merely restate the user's prompt.
-Transform it into a punchline.
+8. Do not merely repeat the user's prompt.
 
-9. Keep it concise.
-Prefer 6–14 words unless the user specifically asks for something else.
+Transform the idea into a punchline.
+
+9. Keep the caption concise.
+
+Prefer approximately 6 to 14 words unless the user specifically asks
+for something else.
 
 10. Do not explain the joke.
 
 11. Do not include:
+
 - "Caption:"
 - quotation marks around the answer
-- multiple choices
+- multiple caption choices
 - analysis
 - explanations
 
-12. Before answering, silently ask yourself:
+12. Before answering, silently check:
 
 A. Does this sentence make literal sense?
+
 B. Does it preserve the user's scenario?
+
 C. Did I accidentally reverse cause and effect?
+
 D. Would a college student understand the joke immediately?
-E. Does the caption fit the image?
+
+E. Does the caption fit the uploaded image?
 
 If ANY answer is no, rewrite the caption before responding.
 
 Internally consider several possible captions.
+
 Choose only the clearest and funniest logically coherent one.
 
 ${rejectedSection}
@@ -190,7 +211,9 @@ OUTPUT ONLY THE FINAL CAPTION.
 
 function isRetryableError(error: unknown) {
     const message =
-        error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+        error instanceof Error
+            ? error.message.toLowerCase()
+            : String(error).toLowerCase();
 
     return (
         message.includes("503") ||
@@ -254,11 +277,15 @@ async function callGemini(
                 error
             );
 
-            if (!isRetryableError(error) || attempt === MAX_MODEL_RETRIES) {
+            if (
+                !isRetryableError(error) ||
+                attempt === MAX_MODEL_RETRIES
+            ) {
                 throw error;
             }
 
-            // 1 second after first failure, 2 seconds after second failure
+            // Wait 1 second after first failure,
+            // then 2 seconds after second failure.
             await sleep(attempt * 1000);
         }
     }
@@ -277,10 +304,10 @@ async function generateCaption(
     const rejectedCaptions: string[] = [];
 
     /*
-     * We allow a few caption attempts.
+     * Allow several caption attempts.
      *
-     * If Gemini falls into one of the obviously broken meme-logic
-     * templates, we automatically reject it and ask again.
+     * If Gemini creates one of the known bad-logic meme patterns,
+     * reject it automatically and ask Gemini to generate again.
      */
     for (
         let captionAttempt = 1;
@@ -343,8 +370,8 @@ async function generateCaption(
     }
 
     /*
-     * This would be extremely unusual, but if all attempts fall into
-     * one of our known bad patterns, fail instead of storing nonsense.
+     * If all attempts still produce one of our known bad patterns,
+     * return an error rather than saving a nonsense caption.
      */
     throw new Error(
         "The AI kept generating logically inconsistent captions. Please try again."
@@ -380,7 +407,7 @@ export async function POST(request: Request) {
         }
 
         // ---------------------------------------------------------
-        // 2. Confirm that Gemini API key exists
+        // 2. Confirm that the Gemini API key exists
         // ---------------------------------------------------------
 
         const apiKey = process.env.GEMINI_API_KEY;
@@ -399,7 +426,7 @@ export async function POST(request: Request) {
         }
 
         // ---------------------------------------------------------
-        // 3. Read request body
+        // 3. Read the request body
         // ---------------------------------------------------------
 
         const body = await request.json();
@@ -420,7 +447,7 @@ export async function POST(request: Request) {
                 : "";
 
         // ---------------------------------------------------------
-        // 4. Validate input
+        // 4. Validate the input
         // ---------------------------------------------------------
 
         if (!imageUrl) {
@@ -458,7 +485,7 @@ export async function POST(request: Request) {
         }
 
         // ---------------------------------------------------------
-        // 5. Make sure Gemini can only fetch images from our bucket
+        // 5. Make sure Gemini only fetches images from our bucket
         // ---------------------------------------------------------
 
         const supabaseUrl =
@@ -490,7 +517,7 @@ export async function POST(request: Request) {
         }
 
         // ---------------------------------------------------------
-        // 6. Download image from Supabase Storage
+        // 6. Download the image from Supabase Storage
         // ---------------------------------------------------------
 
         const imageResponse = await fetch(imageUrl);
@@ -539,7 +566,7 @@ export async function POST(request: Request) {
         );
 
         // ---------------------------------------------------------
-        // 8. Return caption to frontend
+        // 8. Return the generated caption to the frontend
         // ---------------------------------------------------------
 
         return NextResponse.json({
@@ -547,7 +574,10 @@ export async function POST(request: Request) {
             model: result.model,
         });
     } catch (error) {
-        console.error("Gemini caption generation error:", error);
+        console.error(
+            "Gemini caption generation error:",
+            error
+        );
 
         const message =
             error instanceof Error
