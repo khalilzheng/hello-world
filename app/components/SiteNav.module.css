@@ -1,0 +1,416 @@
+.nav {
+    position: fixed;
+    z-index: 1000;
+
+    top: 0;
+    right: 0;
+    left: 0;
+
+    height: 70px;
+
+    box-sizing: border-box;
+
+    background:
+            rgba(
+                    7,
+                    7,
+                    7,
+                    0.97
+            );
+
+    border-bottom:
+            1px solid
+            rgba(
+                    255,
+                    255,
+                    255,
+                    0.075
+            );
+
+    color: #ffffff;
+
+    backdrop-filter:
+            blur(18px);
+
+    -webkit-backdrop-filter:
+            blur(18px);
+}
+
+.navInner {
+    width: 100%;
+    height: 100%;
+
+    box-sizing: border-box;
+
+    padding: 0 40px;
+
+    display: grid;
+
+    grid-template-columns:
+    1fr auto 1fr;
+
+    align-items: center;
+
+    gap: 24px;
+}
+
+
+/* =========================================================
+   BRAND
+   ========================================================= */
+
+.brand {
+    width: fit-content;
+
+    padding: 0;
+
+    display: inline-flex;
+
+    align-items: center;
+
+    gap: 11px;
+
+    border: 0;
+
+    background: transparent;
+
+    color: #ffffff;
+
+    font: inherit;
+
+    cursor: pointer;
+
+    transition:
+            opacity 160ms ease,
+            transform 160ms ease;
+}
+
+.brand:hover {
+    opacity: 0.82;
+}
+
+.brand:active {
+    transform:
+            scale(0.98);
+}
+
+.brandMark {
+    width: 28px;
+    height: 28px;
+
+    flex: 0 0 28px;
+
+    display: grid;
+
+    place-items: center;
+
+    border-radius: 8px;
+
+    background: #ffffff;
+
+    color: #111111;
+
+    font-size: 12px;
+
+    font-weight: 800;
+
+    letter-spacing:
+            -0.04em;
+}
+
+.brandText {
+    font-size: 15px;
+
+    font-weight: 650;
+
+    letter-spacing:
+            -0.02em;
+
+    white-space: nowrap;
+}
+
+
+/* =========================================================
+   CENTER NAV
+   ========================================================= */
+
+.centerNav {
+    display: flex;
+
+    align-items: center;
+
+    justify-content: center;
+
+    gap: 42px;
+}
+
+.centerNav button {
+    position: relative;
+
+    padding: 11px 0;
+
+    border: 0;
+
+    background: transparent;
+
+    color:
+            rgba(
+                    255,
+                    255,
+                    255,
+                    0.76
+            );
+
+    font: inherit;
+
+    font-size: 14px;
+
+    font-weight: 500;
+
+    letter-spacing:
+            -0.01em;
+
+    cursor: pointer;
+
+    transition:
+            color 160ms ease,
+            transform 160ms ease;
+}
+
+.centerNav button::after {
+    content: "";
+
+    position: absolute;
+
+    right: 0;
+    bottom: 4px;
+    left: 0;
+
+    height: 1px;
+
+    background: #ffffff;
+
+    transform:
+            scaleX(0);
+
+    transform-origin: center;
+
+    transition:
+            transform
+            180ms
+            cubic-bezier(
+                    0.16,
+                    1,
+                    0.3,
+                    1
+            );
+}
+
+.centerNav button:hover {
+    color: #ffffff;
+}
+
+.centerNav button:hover::after {
+    transform:
+            scaleX(1);
+}
+
+.centerNav button:active {
+    transform:
+            scale(0.96);
+}
+
+
+/* =========================================================
+   RIGHT
+   ========================================================= */
+
+.actions {
+    display: flex;
+
+    align-items: center;
+
+    justify-content: flex-end;
+
+    gap: 10px;
+}
+
+.secondaryButton,
+.loginButton,
+.signupButton {
+    height: 40px;
+
+    box-sizing: border-box;
+
+    padding: 0 19px;
+
+    display: inline-flex;
+
+    align-items: center;
+
+    justify-content: center;
+
+    border-radius: 999px;
+
+    font-family: inherit;
+
+    font-size: 13px;
+
+    font-weight: 550;
+
+    letter-spacing:
+            -0.01em;
+
+    text-decoration: none;
+
+    white-space: nowrap;
+
+    cursor: pointer;
+
+    transition:
+            background 160ms ease,
+            border-color 160ms ease,
+            color 160ms ease,
+            transform 160ms ease;
+}
+
+.secondaryButton,
+.loginButton {
+    border:
+            1px solid
+            rgba(
+                    255,
+                    255,
+                    255,
+                    0.15
+            );
+
+    background:
+            rgba(
+                    255,
+                    255,
+                    255,
+                    0.06
+            );
+
+    color:
+            rgba(
+                    255,
+                    255,
+                    255,
+                    0.92
+            );
+}
+
+button.secondaryButton {
+    font: inherit;
+
+    font-size: 13px;
+
+    font-weight: 550;
+}
+
+.secondaryButton:hover,
+.loginButton:hover {
+    border-color:
+            rgba(
+                    255,
+                    255,
+                    255,
+                    0.27
+            );
+
+    background:
+            rgba(
+                    255,
+                    255,
+                    255,
+                    0.11
+            );
+
+    color: #ffffff;
+
+    transform:
+            translateY(-1px);
+}
+
+.signupButton {
+    border:
+            1px solid #ffffff;
+
+    background: #ffffff;
+
+    color: #111111;
+
+    font-weight: 650;
+}
+
+.signupButton:hover {
+    border-color: #ededed;
+
+    background: #ededed;
+
+    transform:
+            translateY(-1px);
+}
+
+
+/* =========================================================
+   TABLET
+   ========================================================= */
+
+@media (max-width: 900px) {
+    .navInner {
+        padding: 0 22px;
+    }
+
+    .centerNav {
+        gap: 27px;
+    }
+
+    .brandText {
+        display: none;
+    }
+}
+
+
+/* =========================================================
+   MOBILE
+   ========================================================= */
+
+@media (max-width: 680px) {
+    .nav {
+        height: 66px;
+    }
+
+    .navInner {
+        padding: 0 14px;
+
+        grid-template-columns:
+      auto 1fr auto;
+
+        gap: 10px;
+    }
+
+    .centerNav {
+        gap: 18px;
+    }
+
+    .centerNav button {
+        font-size: 11px;
+    }
+
+    .secondaryButton,
+    .loginButton,
+    .signupButton {
+        height: 35px;
+
+        padding: 0 12px;
+
+        font-size: 11px;
+    }
+
+    .signupButton {
+        display: none;
+    }
+}
