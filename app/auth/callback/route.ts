@@ -1,17 +1,11 @@
-import {
-    NextRequest,
-    NextResponse,
-} from "next/server";
-
+import { NextResponse } from "next/server";
 import { createClient } from "@/utils/supabase/server";
 
 export async function GET(
-    request: NextRequest
+    request: Request
 ) {
     const requestUrl =
-        new URL(
-            request.url
-        );
+        new URL(request.url);
 
     const code =
         requestUrl.searchParams.get(
@@ -21,154 +15,147 @@ export async function GET(
     const origin =
         requestUrl.origin;
 
-    const authIntent =
-        request.cookies.get(
-            "auth_intent"
-        )?.value;
-
+    /*
+     * OAuth callback must contain
+     * an authorization code.
+     */
     if (!code) {
-        const response =
-            NextResponse.redirect(
-                new URL(
-                    "/login?error=missing_code",
-                    origin
-                )
-            );
-
-        response.cookies.set(
-            "auth_intent",
-            "",
-            {
-                path: "/",
-                maxAge: 0,
-            }
+        return NextResponse.redirect(
+            new URL(
+                "/login?error=missing_code",
+                origin
+            )
         );
-
-        return response;
     }
 
     const supabase =
         await createClient();
 
+    /*
+     * Exchange OAuth authorization
+     * code for a Supabase session.
+     */
     const {
-        error,
+        error: exchangeError,
     } =
         await supabase.auth.exchangeCodeForSession(
             code
         );
 
-    if (error) {
+    if (exchangeError) {
         console.error(
-            "OAuth callback error:",
-            error
+            "OAuth exchange error:",
+            exchangeError
         );
 
-        const response =
-            NextResponse.redirect(
-                new URL(
-                    "/login?error=oauth",
-                    origin
-                )
-            );
-
-        response.cookies.set(
-            "auth_intent",
-            "",
-            {
-                path: "/",
-                maxAge: 0,
-            }
-        );
-
-        return response;
-    }
-
-    /*
-     * DEFAULT:
-     *
-     * Every normal login goes straight
-     * to the dashboard.
-     */
-    let destination =
-        "/dashboard";
-
-    /*
-     * ONLY when the user clicked
-     * "Sign up for free" do we check
-     * whether this appears to be a
-     * brand-new account.
-     */
-    if (
-        authIntent ===
-        "signup"
-    ) {
-        const {
-            data: {
-                user,
-            },
-        } =
-            await supabase.auth.getUser();
-
-        if (user) {
-            const {
-                data:
-                    profile,
-            } = await supabase
-                .from("profiles")
-                .select(
-                    "first_name, last_name"
-                )
-                .eq(
-                    "id",
-                    user.id
-                )
-                .maybeSingle();
-
-            /*
-             * New users have an empty profile
-             * because our Supabase trigger
-             * creates the profile row.
-             */
-            const firstName =
-                profile?.first_name
-                    ?.trim() ?? "";
-
-            const lastName =
-                profile?.last_name
-                    ?.trim() ?? "";
-
-            const profileIsEmpty =
-                !firstName &&
-                !lastName;
-
-            if (
-                profileIsEmpty
-            ) {
-                destination =
-                    "/profile?welcome=1";
-            }
-        }
-    }
-
-    const response =
-        NextResponse.redirect(
+        return NextResponse.redirect(
             new URL(
-                destination,
+                "/login?error=oauth",
                 origin
             )
         );
+    }
 
     /*
-     * Remove the temporary auth intent.
+     * Get authenticated user.
      */
-    response.cookies.set(
-        "auth_intent",
-        "",
-        {
-            path: "/",
-            maxAge: 0,
-        }
-    );
+    const {
+        data: { user },
+        error: userError,
+    } =
+        await supabase.auth.getUser();
 
-    return response;
+    if (
+        userError ||
+        !user
+    ) {
+        console.error(
+            "Authenticated user error:",
+            userError
+        );
+
+        return NextResponse.redirect(
+            new URL(
+                "/login?error=session",
+                origin
+            )
+        );
+    }
+
+    /*
+     * Check Meme Lab profile.
+     *
+     * Your database trigger automatically
+     * creates a profiles row for every
+     * new Supabase user.
+     */
+    const {
+        data: profile,
+        error: profileError,
+    } =
+        await supabase
+            .from("profiles")
+            .select(
+                "id, first_name, last_name"
+            )
+            .eq(
+                "id",
+                user.id
+            )
+            .maybeSingle();
+
+    if (profileError) {
+        console.error(
+            "Profile lookup error:",
+            profileError
+        );
+
+        /*
+         * Safer fallback:
+         * don't accidentally treat the
+         * user as fully onboarded.
+         */
+        return NextResponse.redirect(
+            new URL(
+                "/profile?welcome=1",
+                origin
+            )
+        );
+    }
+
+    const firstName =
+        profile?.first_name?.trim() ?? "";
+
+    const lastName =
+        profile?.last_name?.trim() ?? "";
+
+    /*
+     * Brand-new account OR
+     * account that never finished
+     * profile onboarding.
+     */
+    const profileIncomplete =
+        !profile ||
+        !firstName ||
+        !lastName;
+
+    if (profileIncomplete) {
+        return NextResponse.redirect(
+            new URL(
+                "/profile?welcome=1",
+                origin
+            )
+        );
+    }
+
+    /*
+     * Returning user with a
+     * completed profile.
+     */
+    return NextResponse.redirect(
+        new URL(
+            "/dashboard",
+            origin
+        )
+    );
 }

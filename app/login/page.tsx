@@ -1,70 +1,57 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
-
+import { useMemo, useState } from "react";
 import { createClient } from "@/utils/supabase/client";
-
 import styles from "../AuthPage.module.css";
 
 export default function LoginPage() {
-    const supabase =
-        createClient();
+    const supabase = useMemo(
+        () => createClient(),
+        []
+    );
 
-    const [
-        loading,
-        setLoading,
-    ] = useState(false);
+    const [loading, setLoading] =
+        useState(false);
 
-    const [
-        errorMessage,
-        setErrorMessage,
-    ] = useState("");
+    const [errorMessage, setErrorMessage] =
+        useState("");
 
-    async function login() {
+    async function loginWithGoogle() {
         try {
             setLoading(true);
-
             setErrorMessage("");
 
-            /*
-             * Important:
-             *
-             * This cookie tells our callback that
-             * this is a NORMAL LOGIN.
-             *
-             * Normal login always goes to /dashboard.
-             */
-            document.cookie =
-                "auth_intent=login; Path=/; Max-Age=600; SameSite=Lax";
+            const redirectTo =
+                `${window.location.origin}/auth/callback`;
 
-            const {
-                error,
-            } =
-                await supabase.auth.signInWithOAuth(
-                    {
-                        provider:
-                            "google",
+            const { error } =
+                await supabase.auth.signInWithOAuth({
+                    provider: "google",
 
-                        options: {
-                            redirectTo:
-                                `${window.location.origin}/auth/callback`,
+                    options: {
+                        redirectTo,
+
+                        /*
+                         * Always let the user choose
+                         * which Google account to use.
+                         */
+                        queryParams: {
+                            prompt: "select_account",
                         },
-                    }
-                );
+                    },
+                });
 
             if (error) {
                 throw error;
             }
         } catch (error) {
-            console.warn(
-                error
-            );
+            console.warn(error);
 
             setErrorMessage(
                 error instanceof Error
                     ? error.message
-                    : "Could not log in."
+                    : "Could not log in with Google."
             );
 
             setLoading(false);
@@ -72,119 +59,91 @@ export default function LoginPage() {
     }
 
     return (
-        <main
-            className={
-                styles.page
-            }
-        >
-            <header
-                className={
-                    styles.nav
-                }
+        <main className={styles.page}>
+            <div
+                className={styles.backgroundGlow}
+            />
+
+            <Link
+                href="/dashboard"
+                className={styles.brand}
             >
-                <Link
-                    href="/dashboard"
-                    className={
-                        styles.brand
+        <span
+            className={styles.brandMark}
+        >
+          M
+        </span>
+
+                <span>Meme Lab</span>
+            </Link>
+
+            <section
+                className={styles.authCard}
+            >
+                <p className={styles.eyebrow}>
+                    WELCOME BACK
+                </p>
+
+                <h1>Log in to Meme Lab.</h1>
+
+                <p
+                    className={styles.description}
+                >
+                    Continue creating AI memes,
+                    voting on campus humor, and
+                    exploring the community.
+                </p>
+
+                <button
+                    type="button"
+                    className={styles.googleButton}
+                    disabled={loading}
+                    onClick={() =>
+                        void loginWithGoogle()
                     }
                 >
-          <span>
-            M
+          <span
+              className={styles.googleIcon}
+          >
+            G
           </span>
 
-                    Meme Lab
-                </Link>
+                    <span>
+            {loading
+                ? "Connecting..."
+                : "Continue with Google"}
+          </span>
+                </button>
+
+                {errorMessage && (
+                    <p className={styles.error}>
+                        {errorMessage}
+                    </p>
+                )}
+
+                <div
+                    className={styles.divider}
+                >
+                    <span />
+                    <p>New to Meme Lab?</p>
+                    <span />
+                </div>
 
                 <Link
                     href="/signup"
                     className={
-                        styles.navButton
+                        styles.secondaryButton
                     }
                 >
                     Sign up for free
                 </Link>
-            </header>
 
-            <section
-                className={
-                    styles.content
-                }
-            >
-                <div
-                    className={
-                        styles.card
-                    }
+                <p
+                    className={styles.footerText}
                 >
-                    <div
-                        className={
-                            styles.mark
-                        }
-                    >
-                        M
-                    </div>
-
-                    <p
-                        className={
-                            styles.eyebrow
-                        }
-                    >
-                        WELCOME BACK
-                    </p>
-
-                    <h1>
-                        Log in to
-                        <br />
-                        Meme Lab.
-                    </h1>
-
-                    <p
-                        className={
-                            styles.description
-                        }
-                    >
-                        Create AI memes,
-                        vote on campus humor,
-                        and discover what
-                        Columbia finds funny.
-                    </p>
-
-                    <button
-                        type="button"
-                        onClick={() =>
-                            void login()
-                        }
-                        disabled={
-                            loading
-                        }
-                    >
-                        {loading
-                            ? "Connecting..."
-                            : "Continue with Google"}
-                    </button>
-
-                    {errorMessage && (
-                        <p
-                            className={
-                                styles.error
-                            }
-                        >
-                            {
-                                errorMessage
-                            }
-                        </p>
-                    )}
-
-                    <span
-                        className={
-                            styles.switchText
-                        }
-                    >
-            New to Meme Lab?{" "}
-                        <Link href="/signup">
-              Sign up for free
-            </Link>
-          </span>
-                </div>
+                    Your memes and votes stay
+                    connected to your account.
+                </p>
             </section>
         </main>
     );

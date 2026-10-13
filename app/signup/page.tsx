@@ -1,73 +1,59 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
-
+import { useMemo, useState } from "react";
 import { createClient } from "@/utils/supabase/client";
-
 import styles from "../AuthPage.module.css";
 
 export default function SignupPage() {
-    const supabase =
-        createClient();
+    const supabase = useMemo(
+        () => createClient(),
+        []
+    );
 
-    const [
-        loading,
-        setLoading,
-    ] = useState(false);
+    const [loading, setLoading] =
+        useState(false);
 
-    const [
-        errorMessage,
-        setErrorMessage,
-    ] = useState("");
+    const [errorMessage, setErrorMessage] =
+        useState("");
 
-    async function signup() {
+    async function signUpWithGoogle() {
         try {
             setLoading(true);
-
             setErrorMessage("");
 
-            /*
-             * The callback checks this cookie.
-             *
-             * signup + empty profile
-             *       ↓
-             * /profile
-             *
-             * existing account
-             *       ↓
-             * /dashboard
-             */
-            document.cookie =
-                "auth_intent=signup; Path=/; Max-Age=600; SameSite=Lax";
+            const redirectTo =
+                `${window.location.origin}/auth/callback`;
 
-            const {
-                error,
-            } =
-                await supabase.auth.signInWithOAuth(
-                    {
-                        provider:
-                            "google",
+            const { error } =
+                await supabase.auth.signInWithOAuth({
+                    provider: "google",
 
-                        options: {
-                            redirectTo:
-                                `${window.location.origin}/auth/callback`,
+                    options: {
+                        redirectTo,
+
+                        /*
+                         * IMPORTANT:
+                         * Even if Google is already signed in,
+                         * show the account chooser instead of
+                         * silently reusing the previous account.
+                         */
+                        queryParams: {
+                            prompt: "select_account",
                         },
-                    }
-                );
+                    },
+                });
 
             if (error) {
                 throw error;
             }
         } catch (error) {
-            console.warn(
-                error
-            );
+            console.warn(error);
 
             setErrorMessage(
                 error instanceof Error
                     ? error.message
-                    : "Could not sign up."
+                    : "Could not continue with Google."
             );
 
             setLoading(false);
@@ -75,120 +61,91 @@ export default function SignupPage() {
     }
 
     return (
-        <main
-            className={
-                styles.page
-            }
-        >
-            <header
-                className={
-                    styles.nav
-                }
+        <main className={styles.page}>
+            <div
+                className={styles.backgroundGlow}
+            />
+
+            <Link
+                href="/dashboard"
+                className={styles.brand}
             >
-                <Link
-                    href="/dashboard"
-                    className={
-                        styles.brand
+        <span
+            className={styles.brandMark}
+        >
+          M
+        </span>
+
+                <span>Meme Lab</span>
+            </Link>
+
+            <section
+                className={styles.authCard}
+            >
+                <p className={styles.eyebrow}>
+                    JOIN MEME LAB
+                </p>
+
+                <h1>Create your account.</h1>
+
+                <p
+                    className={styles.description}
+                >
+                    Create AI-powered campus memes,
+                    vote on community creations, and
+                    build your Meme Lab profile.
+                </p>
+
+                <button
+                    type="button"
+                    className={styles.googleButton}
+                    disabled={loading}
+                    onClick={() =>
+                        void signUpWithGoogle()
                     }
                 >
-          <span>
-            M
+          <span
+              className={styles.googleIcon}
+          >
+            G
           </span>
 
-                    Meme Lab
-                </Link>
+                    <span>
+            {loading
+                ? "Connecting..."
+                : "Sign up with Google"}
+          </span>
+                </button>
+
+                {errorMessage && (
+                    <p className={styles.error}>
+                        {errorMessage}
+                    </p>
+                )}
+
+                <div
+                    className={styles.divider}
+                >
+                    <span />
+                    <p>Already have an account?</p>
+                    <span />
+                </div>
 
                 <Link
                     href="/login"
                     className={
-                        styles.navButton
+                        styles.secondaryButton
                     }
                 >
                     Log in
                 </Link>
-            </header>
 
-            <section
-                className={
-                    styles.content
-                }
-            >
-                <div
-                    className={
-                        styles.card
-                    }
+                <p
+                    className={styles.footerText}
                 >
-                    <div
-                        className={
-                            styles.mark
-                        }
-                    >
-                        M
-                    </div>
-
-                    <p
-                        className={
-                            styles.eyebrow
-                        }
-                    >
-                        JOIN MEME LAB
-                    </p>
-
-                    <h1>
-                        Campus life
-                        <br />
-                        deserves better memes.
-                    </h1>
-
-                    <p
-                        className={
-                            styles.description
-                        }
-                    >
-                        Create AI-generated
-                        memes, share them with
-                        the community, and vote
-                        on the ones actually
-                        worth laughing at.
-                    </p>
-
-                    <button
-                        type="button"
-                        onClick={() =>
-                            void signup()
-                        }
-                        disabled={
-                            loading
-                        }
-                    >
-                        {loading
-                            ? "Connecting..."
-                            : "Sign up with Google"}
-                    </button>
-
-                    {errorMessage && (
-                        <p
-                            className={
-                                styles.error
-                            }
-                        >
-                            {
-                                errorMessage
-                            }
-                        </p>
-                    )}
-
-                    <span
-                        className={
-                            styles.switchText
-                        }
-                    >
-            Already have an account?{" "}
-                        <Link href="/login">
-              Log in
-            </Link>
-          </span>
-                </div>
+                    Your profile is created after
+                    signing in with Google.
+                </p>
             </section>
         </main>
     );

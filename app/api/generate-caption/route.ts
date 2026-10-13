@@ -2,8 +2,15 @@ import { NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 import { createClient } from "@/utils/supabase/server";
 
+export const runtime = "nodejs";
+
 const PRIMARY_MODEL = "gemini-3.8-flash";
 const FALLBACK_MODEL = "gemini-3.5-flash-lite";
+
+const FALLBACK_RETRY_DELAY_MS = 800;
+
+const MAX_IMAGE_BYTES =
+    10 * 1024 * 1024;
 
 const ALLOWED_MIME_TYPES = new Set([
     "image/png",
@@ -12,393 +19,352 @@ const ALLOWED_MIME_TYPES = new Set([
     "image/gif",
 ]);
 
-const MAX_MODEL_RETRIES = 3;
-const MAX_CAPTION_ATTEMPTS = 3;
+type GenerateResult = {
+    caption: string;
+    model: string;
+};
 
-function cleanCaption(text: string) {
-    let caption = text.trim();
 
-    // Remove markdown/code fences if Gemini adds them
-    caption = caption.replace(/^```(?:text)?/i, "");
-    caption = caption.replace(/```$/i, "");
-
-    // Remove labels Gemini may add
-    caption = caption.replace(/^caption\s*:\s*/i, "");
-    caption = caption.replace(/^final caption\s*:\s*/i, "");
-
-    // Remove surrounding quotation marks
-    // [\s\S] is used instead of the /s flag so it works
-    // with older TypeScript / JavaScript targets.
-    caption = caption.replace(/^["“]([\s\S]*)["”]$/, "$1");
-
-    return caption.trim();
+/*
+ * Small delay used only before the
+ * second fallback attempt.
+ */
+function sleep(ms: number) {
+    return new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+    });
 }
 
-function looksLikeBadMemeLogic(caption: string) {
-    const lower = caption.toLowerCase();
 
-    /*
-     * These are common meme constructions that can create
-     * fake or backwards logic.
-     *
-     * Example:
-     * "Can't miss lecture if you never show up."
-     */
-    const badPatterns = [
-        /can't miss .* if you never/i,
-        /cannot miss .* if you never/i,
-        /can't fail .* if you never/i,
-        /cannot fail .* if you never/i,
-        /can't be late .* if you never/i,
-        /cannot be late .* if you never/i,
-        /can't lose .* if you never/i,
-        /cannot lose .* if you never/i,
-    ];
-
-    if (badPatterns.some((pattern) => pattern.test(caption))) {
-        return true;
-    }
-
-    // Reject obvious meta responses
-    if (
-        lower.startsWith("here's") ||
-        lower.startsWith("here is") ||
-        lower.startsWith("caption:") ||
-        lower.includes("as an ai")
-    ) {
-        return true;
-    }
-
-    return false;
-}
-
-function buildCaptionPrompt(
-    userPrompt: string,
-    rejectedCaptions: string[] = []
+/*
+ * Convert the downloaded image into
+ * base64 so Gemini can analyze it.
+ */
+function arrayBufferToBase64(
+    buffer: ArrayBuffer
 ) {
-    const rejectedSection =
-        rejectedCaptions.length > 0
-            ? `
-PREVIOUS BAD ATTEMPTS:
-${rejectedCaptions.map((caption) => `- "${caption}"`).join("\n")}
-
-Those captions were rejected because the joke was logically weak,
-contradictory, or based on fake cause-and-effect.
-
-DO NOT repeat their reasoning or structure.
-`
-            : "";
-
-    return `
-You are writing ONE short meme caption for an uploaded image.
-
-The user gave this scenario or idea:
-
-"${userPrompt}"
-
-Your job is to look at BOTH:
-1. the uploaded image
-2. the user's scenario
-
-Then write ONE funny caption that connects them naturally.
-
-This app is mainly designed for college students, especially a
-chronically-online Columbia University student living in New York City.
-
-IMPORTANT RULES:
-
-1. LOGIC COMES FIRST.
-
-The caption must make sense when read literally.
-
-2. Treat the user's scenario as factual.
-
-Do NOT contradict what the user told you.
-
-3. Preserve cause and effect.
-
-If the user's prompt says someone does X because of Y,
-do not reverse that relationship.
-
-4. DO NOT create fake logic just because it sounds like a meme.
-
-BAD EXAMPLE:
-
-User scenario:
-"A student skips lecture because the slides are already online."
-
-BAD caption:
-"Can't miss lecture if you never show up."
-
-Why it is bad:
-Not showing up IS missing lecture, so the sentence contradicts itself.
-
-BETTER:
-"The slides are on CourseWorks. Attendance suddenly feels optional."
-
-Another good direction:
-"CourseWorks posted the slides, so apparently I've graduated from attendance."
-
-5. Avoid lazy meme structures unless they are genuinely logical.
-
-Avoid things like:
-
-- "Can't X if you never Y"
-- "Can't fail X if you never Y"
-- "Can't be late if..."
-- fake philosophical loopholes
-- meaningless cause-and-effect reversals
-
-6. Humor should come from:
-
-- exaggeration
-- relatability
-- irony
-- the person's facial expression
-- college life
-- Columbia culture
-- NYC culture when relevant
-
-Humor should NOT come from a sentence that simply makes no sense.
-
-7. Pay attention to the uploaded image.
-
-Use the person's or animal's expression, body language, or situation
-when it helps the joke.
-
-8. Do not merely repeat the user's prompt.
-
-Transform the idea into a punchline.
-
-9. Keep the caption concise.
-
-Prefer approximately 6 to 14 words unless the user specifically asks
-for something else.
-
-10. Do not explain the joke.
-
-11. Do not include:
-
-- "Caption:"
-- quotation marks around the answer
-- multiple caption choices
-- analysis
-- explanations
-
-12. Before answering, silently check:
-
-A. Does this sentence make literal sense?
-
-B. Does it preserve the user's scenario?
-
-C. Did I accidentally reverse cause and effect?
-
-D. Would a college student understand the joke immediately?
-
-E. Does the caption fit the uploaded image?
-
-If ANY answer is no, rewrite the caption before responding.
-
-Internally consider several possible captions.
-
-Choose only the clearest and funniest logically coherent one.
-
-${rejectedSection}
-
-OUTPUT ONLY THE FINAL CAPTION.
-`;
-}
-
-function isRetryableError(error: unknown) {
-    const message =
-        error instanceof Error
-            ? error.message.toLowerCase()
-            : String(error).toLowerCase();
-
-    return (
-        message.includes("503") ||
-        message.includes("429") ||
-        message.includes("unavailable") ||
-        message.includes("resource_exhausted") ||
-        message.includes("high demand") ||
-        message.includes("overloaded")
+    return Buffer.from(buffer).toString(
+        "base64"
     );
 }
 
-function sleep(ms: number) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+
+/*
+ * Clean Gemini output before saving it.
+ */
+function cleanCaption(text: string) {
+    return text
+        .trim()
+        .replace(/^["“”']+/, "")
+        .replace(/["“”']+$/, "")
+        .replace(/\s+/g, " ");
 }
 
-async function callGemini(
-    ai: GoogleGenAI,
-    modelName: string,
-    imageBase64: string,
-    mimeType: string,
-    prompt: string
+
+/*
+ * Determine whether the error looks
+ * temporary and worth retrying.
+ */
+function isRetryableError(
+    error: unknown
 ) {
-    let lastError: unknown;
+    const message =
+        error instanceof Error
+            ? error.message
+            : String(error);
 
-    for (let attempt = 1; attempt <= MAX_MODEL_RETRIES; attempt++) {
-        try {
-            console.log(`Calling ${modelName}, attempt ${attempt}...`);
+    const normalized =
+        message.toLowerCase();
 
-            const response = await ai.models.generateContent({
-                model: modelName,
-                contents: [
-                    {
-                        role: "user",
-                        parts: [
-                            {
-                                inlineData: {
-                                    mimeType,
-                                    data: imageBase64,
-                                },
+    return (
+        normalized.includes("503") ||
+        normalized.includes("429") ||
+        normalized.includes("unavailable") ||
+        normalized.includes(
+            "resource_exhausted"
+        ) ||
+        normalized.includes("high demand") ||
+        normalized.includes("rate limit") ||
+        normalized.includes("timeout") ||
+        normalized.includes("timed out") ||
+        normalized.includes(
+            "temporarily unavailable"
+        )
+    );
+}
+
+
+/*
+ * Call one Gemini model exactly once.
+ *
+ * There is intentionally no retry loop
+ * inside this function.
+ */
+async function callModel({
+                             ai,
+                             model,
+                             imageBase64,
+                             mimeType,
+                             prompt,
+                         }: {
+    ai: GoogleGenAI;
+    model: string;
+    imageBase64: string;
+    mimeType: string;
+    prompt: string;
+}) {
+    console.log(
+        `Calling ${model}...`
+    );
+
+    const generationInstruction = `
+You are writing ONE short meme caption for an uploaded image.
+
+The user described the situation as:
+
+${prompt}
+
+Requirements:
+- Return exactly ONE meme caption.
+- Maximum 12 words.
+- Use the uploaded image naturally.
+- The caption must make sense with what is visible in the image.
+- Keep it concise and immediately understandable.
+- Make it witty and internet-friendly.
+- Columbia University, campus life, and NYC humor are welcome when relevant.
+- Do not explain the joke.
+- Do not describe your process.
+- Do not provide multiple options.
+- Do not include quotation marks around the answer.
+- Return ONLY the final meme caption.
+`.trim();
+
+    const response =
+        await ai.models.generateContent({
+            model,
+
+            contents: [
+                {
+                    role: "user",
+
+                    parts: [
+                        {
+                            inlineData: {
+                                mimeType,
+                                data: imageBase64,
                             },
-                            {
-                                text: prompt,
-                            },
-                        ],
-                    },
-                ],
+                        },
+
+                        {
+                            text:
+                            generationInstruction,
+                        },
+                    ],
+                },
+            ],
+        });
+
+    const rawText =
+        response.text?.trim() ?? "";
+
+    if (!rawText) {
+        throw new Error(
+            `${model} returned an empty response.`
+        );
+    }
+
+    const caption =
+        cleanCaption(rawText);
+
+    if (!caption) {
+        throw new Error(
+            `${model} returned no usable caption.`
+        );
+    }
+
+    console.log(
+        `Caption generated using ${model}:`,
+        caption
+    );
+
+    return caption;
+}
+
+
+/*
+ * Main generation strategy.
+ *
+ * 1. Primary model once.
+ * 2. Fallback model once.
+ * 3. If fallback fails temporarily,
+ *    wait 800ms and try fallback once more.
+ */
+async function generateCaption({
+                                   ai,
+                                   imageBase64,
+                                   mimeType,
+                                   prompt,
+                               }: {
+    ai: GoogleGenAI;
+    imageBase64: string;
+    mimeType: string;
+    prompt: string;
+}): Promise<GenerateResult> {
+
+    /*
+     * ========================================
+     * PRIMARY MODEL
+     * ========================================
+     */
+
+    try {
+        const caption =
+            await callModel({
+                ai,
+                model: PRIMARY_MODEL,
+                imageBase64,
+                mimeType,
+                prompt,
             });
 
-            const text = response.text;
-
-            if (!text || !text.trim()) {
-                throw new Error(`${modelName} returned an empty response.`);
-            }
-
-            return cleanCaption(text);
-        } catch (error) {
-            lastError = error;
-
-            console.error(
-                `${modelName} attempt ${attempt} failed:`,
-                error
+        return {
+            caption,
+            model: PRIMARY_MODEL,
+        };
+    } catch (primaryError) {
+        if (
+            isRetryableError(primaryError)
+        ) {
+            console.warn(
+                `${PRIMARY_MODEL} is temporarily unavailable. Switching to ${FALLBACK_MODEL}.`
             );
-
-            if (
-                !isRetryableError(error) ||
-                attempt === MAX_MODEL_RETRIES
-            ) {
-                throw error;
-            }
-
-            // Wait 1 second after first failure,
-            // then 2 seconds after second failure.
-            await sleep(attempt * 1000);
+        } else {
+            console.warn(
+                `${PRIMARY_MODEL} failed. Switching to ${FALLBACK_MODEL}.`,
+                primaryError
+            );
         }
     }
 
-    throw lastError instanceof Error
-        ? lastError
-        : new Error(`Failed to call ${modelName}.`);
-}
-
-async function generateCaption(
-    ai: GoogleGenAI,
-    imageBase64: string,
-    mimeType: string,
-    userPrompt: string
-) {
-    const rejectedCaptions: string[] = [];
 
     /*
-     * Allow several caption attempts.
-     *
-     * If Gemini creates one of the known bad-logic meme patterns,
-     * reject it automatically and ask Gemini to generate again.
+     * ========================================
+     * FALLBACK — ATTEMPT 1
+     * ========================================
      */
-    for (
-        let captionAttempt = 1;
-        captionAttempt <= MAX_CAPTION_ATTEMPTS;
-        captionAttempt++
-    ) {
-        const finalPrompt = buildCaptionPrompt(
-            userPrompt,
-            rejectedCaptions
-        );
 
-        let caption: string;
-        let modelUsed: string;
-
-        try {
-            caption = await callGemini(
+    try {
+        const caption =
+            await callModel({
                 ai,
-                PRIMARY_MODEL,
+                model: FALLBACK_MODEL,
                 imageBase64,
                 mimeType,
-                finalPrompt
+                prompt,
+            });
+
+        return {
+            caption,
+            model: FALLBACK_MODEL,
+        };
+    } catch (fallbackError) {
+        /*
+         * If this is NOT a temporary problem,
+         * retrying immediately is unlikely
+         * to help.
+         */
+        if (
+            !isRetryableError(
+                fallbackError
+            )
+        ) {
+            console.error(
+                `${FALLBACK_MODEL} failed with a non-retryable error:`,
+                fallbackError
             );
 
-            modelUsed = PRIMARY_MODEL;
-        } catch (primaryError) {
-            console.warn(
-                `${PRIMARY_MODEL} failed. Trying ${FALLBACK_MODEL}...`,
-                primaryError
+            throw new Error(
+                "GENERATION_UNAVAILABLE"
             );
-
-            caption = await callGemini(
-                ai,
-                FALLBACK_MODEL,
-                imageBase64,
-                mimeType,
-                finalPrompt
-            );
-
-            modelUsed = FALLBACK_MODEL;
-        }
-
-        console.log(
-            `Caption attempt ${captionAttempt} using ${modelUsed}:`,
-            caption
-        );
-
-        if (!looksLikeBadMemeLogic(caption)) {
-            return {
-                caption,
-                model: modelUsed,
-            };
         }
 
         console.warn(
-            "Rejected caption because it matched a bad-logic pattern:",
-            caption
+            `${FALLBACK_MODEL} is temporarily busy. Retrying once in ${FALLBACK_RETRY_DELAY_MS}ms...`
         );
-
-        rejectedCaptions.push(caption);
     }
 
+
     /*
-     * If all attempts still produce one of our known bad patterns,
-     * return an error rather than saving a nonsense caption.
+     * ========================================
+     * FALLBACK — ATTEMPT 2
+     * ========================================
      */
-    throw new Error(
-        "The AI kept generating logically inconsistent captions. Please try again."
+
+    await sleep(
+        FALLBACK_RETRY_DELAY_MS
     );
+
+    try {
+        const caption =
+            await callModel({
+                ai,
+                model: FALLBACK_MODEL,
+                imageBase64,
+                mimeType,
+                prompt,
+            });
+
+        return {
+            caption,
+            model: FALLBACK_MODEL,
+        };
+    } catch (finalError) {
+        console.error(
+            "All Gemini generation attempts failed:",
+            finalError
+        );
+
+        throw new Error(
+            "GENERATION_UNAVAILABLE"
+        );
+    }
 }
 
-export async function POST(request: Request) {
-    try {
-        // ---------------------------------------------------------
-        // 1. Confirm that the user is logged in
-        // ---------------------------------------------------------
 
-        const supabase = await createClient();
+/*
+ * =====================================================
+ * POST /api/generate-caption
+ * =====================================================
+ */
+
+export async function POST(
+    request: Request
+) {
+    try {
+
+        /*
+         * ========================================
+         * 1. AUTHENTICATION
+         * ========================================
+         */
+
+        const supabase =
+            await createClient();
 
         const {
             data: { user },
-            error: userError,
-        } = await supabase.auth.getUser();
+            error: authError,
+        } =
+            await supabase.auth.getUser();
 
-        if (userError) {
-            console.error("Supabase auth error:", userError);
-        }
-
-        if (!user) {
+        if (
+            authError ||
+            !user
+        ) {
             return NextResponse.json(
                 {
-                    error: "You must be logged in to generate a meme.",
+                    error:
+                        "Please log in to generate a meme.",
                 },
                 {
                     status: 401,
@@ -406,18 +372,25 @@ export async function POST(request: Request) {
             );
         }
 
-        // ---------------------------------------------------------
-        // 2. Confirm that the Gemini API key exists
-        // ---------------------------------------------------------
 
-        const apiKey = process.env.GEMINI_API_KEY;
+        /*
+         * ========================================
+         * 2. GEMINI API KEY
+         * ========================================
+         */
+
+        const apiKey =
+            process.env.GEMINI_API_KEY;
 
         if (!apiKey) {
-            console.error("GEMINI_API_KEY is missing.");
+            console.error(
+                "GEMINI_API_KEY is missing."
+            );
 
             return NextResponse.json(
                 {
-                    error: "Gemini API key is not configured.",
+                    error:
+                        "AI generation is temporarily unavailable.",
                 },
                 {
                     status: 500,
@@ -425,35 +398,65 @@ export async function POST(request: Request) {
             );
         }
 
-        // ---------------------------------------------------------
-        // 3. Read the request body
-        // ---------------------------------------------------------
 
-        const body = await request.json();
+        /*
+         * ========================================
+         * 3. READ REQUEST
+         * ========================================
+         */
+
+        let body: {
+            imageUrl?: unknown;
+            mimeType?: unknown;
+            prompt?: unknown;
+        };
+
+        try {
+            body =
+                await request.json();
+        } catch {
+            return NextResponse.json(
+                {
+                    error:
+                        "Invalid request.",
+                },
+                {
+                    status: 400,
+                }
+            );
+        }
+
 
         const imageUrl =
-            typeof body.imageUrl === "string"
+            typeof body.imageUrl ===
+            "string"
                 ? body.imageUrl.trim()
                 : "";
 
         const mimeType =
-            typeof body.mimeType === "string"
-                ? body.mimeType.trim().toLowerCase()
+            typeof body.mimeType ===
+            "string"
+                ? body.mimeType.trim()
                 : "";
 
-        const userPrompt =
-            typeof body.prompt === "string"
+        const prompt =
+            typeof body.prompt ===
+            "string"
                 ? body.prompt.trim()
                 : "";
 
-        // ---------------------------------------------------------
-        // 4. Validate the input
-        // ---------------------------------------------------------
+
+        /*
+         * ========================================
+         * 4. VALIDATE USER INPUT
+         * ========================================
+         */
 
         if (!imageUrl) {
             return NextResponse.json(
                 {
-                    error: "Image URL is required.",
+                    error:
+                        "Please add an image first.",
                 },
                 {
                     status: 400,
@@ -461,22 +464,11 @@ export async function POST(request: Request) {
             );
         }
 
-        if (!userPrompt) {
-            return NextResponse.json(
-                {
-                    error: "Prompt is required.",
-                },
-                {
-                    status: 400,
-                }
-            );
-        }
-
-        if (!ALLOWED_MIME_TYPES.has(mimeType)) {
+        if (!prompt) {
             return NextResponse.json(
                 {
                     error:
-                        "Unsupported image type. Please use PNG, JPEG, WEBP, or GIF.",
+                        "Describe the meme you want to create.",
                 },
                 {
                     status: 400,
@@ -484,17 +476,42 @@ export async function POST(request: Request) {
             );
         }
 
-        // ---------------------------------------------------------
-        // 5. Make sure Gemini only fetches images from our bucket
-        // ---------------------------------------------------------
-
-        const supabaseUrl =
-            process.env.NEXT_PUBLIC_SUPABASE_URL;
-
-        if (!supabaseUrl) {
+        if (
+            !ALLOWED_MIME_TYPES.has(
+                mimeType
+            )
+        ) {
             return NextResponse.json(
                 {
-                    error: "Supabase URL is not configured.",
+                    error:
+                        "Unsupported image type.",
+                },
+                {
+                    status: 400,
+                }
+            );
+        }
+
+
+        /*
+         * ========================================
+         * 5. VALIDATE IMAGE URL
+         * ========================================
+         */
+
+        const supabaseUrl =
+            process.env
+                .NEXT_PUBLIC_SUPABASE_URL;
+
+        if (!supabaseUrl) {
+            console.error(
+                "NEXT_PUBLIC_SUPABASE_URL is missing."
+            );
+
+            return NextResponse.json(
+                {
+                    error:
+                        "Image service is temporarily unavailable.",
                 },
                 {
                     status: 500,
@@ -502,13 +519,23 @@ export async function POST(request: Request) {
             );
         }
 
-        const expectedImagePrefix =
+        const expectedPrefix =
             `${supabaseUrl}/storage/v1/object/public/meme-images/`;
 
-        if (!imageUrl.startsWith(expectedImagePrefix)) {
+        if (
+            !imageUrl.startsWith(
+                expectedPrefix
+            )
+        ) {
+            console.warn(
+                "Rejected image URL:",
+                imageUrl
+            );
+
             return NextResponse.json(
                 {
-                    error: "Invalid image URL.",
+                    error:
+                        "Invalid image URL.",
                 },
                 {
                     status: 400,
@@ -516,22 +543,77 @@ export async function POST(request: Request) {
             );
         }
 
-        // ---------------------------------------------------------
-        // 6. Download the image from Supabase Storage
-        // ---------------------------------------------------------
 
-        const imageResponse = await fetch(imageUrl);
+        /*
+         * ========================================
+         * 6. DOWNLOAD IMAGE
+         * ========================================
+         */
 
-        if (!imageResponse.ok) {
+        let imageResponse: Response;
+
+        try {
+            imageResponse =
+                await fetch(
+                    imageUrl,
+                    {
+                        cache: "no-store",
+                    }
+                );
+        } catch (error) {
             console.error(
                 "Could not download image:",
-                imageResponse.status,
-                imageResponse.statusText
+                error
             );
 
             return NextResponse.json(
                 {
-                    error: "Could not load the uploaded image.",
+                    error:
+                        "Couldn’t read the uploaded image. Try again.",
+                },
+                {
+                    status: 502,
+                }
+            );
+        }
+
+        if (
+            !imageResponse.ok
+        ) {
+            console.error(
+                "Image download HTTP status:",
+                imageResponse.status
+            );
+
+            return NextResponse.json(
+                {
+                    error:
+                        "Couldn’t read the uploaded image. Try again.",
+                },
+                {
+                    status: 502,
+                }
+            );
+        }
+
+
+        /*
+         * ========================================
+         * 7. CHECK IMAGE SIZE
+         * ========================================
+         */
+
+        const imageBuffer =
+            await imageResponse.arrayBuffer();
+
+        if (
+            imageBuffer.byteLength >
+            MAX_IMAGE_BYTES
+        ) {
+            return NextResponse.json(
+                {
+                    error:
+                        "Image must be 10 MB or smaller.",
                 },
                 {
                     status: 400,
@@ -539,54 +621,100 @@ export async function POST(request: Request) {
             );
         }
 
-        const imageArrayBuffer =
-            await imageResponse.arrayBuffer();
-
         const imageBase64 =
-            Buffer.from(imageArrayBuffer).toString("base64");
+            arrayBufferToBase64(
+                imageBuffer
+            );
 
-        // ---------------------------------------------------------
-        // 7. Call Gemini
-        // ---------------------------------------------------------
 
-        const ai = new GoogleGenAI({
-            apiKey,
-        });
+        /*
+         * ========================================
+         * 8. CREATE GEMINI CLIENT
+         * ========================================
+         */
 
-        const result = await generateCaption(
-            ai,
-            imageBase64,
-            mimeType,
-            userPrompt
-        );
+        const ai =
+            new GoogleGenAI({
+                apiKey,
+            });
 
-        console.log(
-            `Caption generated using ${result.model}:`,
-            result.caption
-        );
 
-        // ---------------------------------------------------------
-        // 8. Return the generated caption to the frontend
-        // ---------------------------------------------------------
+        /*
+         * ========================================
+         * 9. GENERATE CAPTION
+         * ========================================
+         */
 
-        return NextResponse.json({
-            caption: result.caption,
-            model: result.model,
-        });
-    } catch (error) {
-        console.error(
-            "Gemini caption generation error:",
-            error
-        );
+        let result:
+            GenerateResult;
 
-        const message =
-            error instanceof Error
-                ? error.message
-                : "Unknown error.";
+        try {
+            result =
+                await generateCaption({
+                    ai,
+                    imageBase64,
+                    mimeType,
+                    prompt,
+                });
+        } catch (error) {
+            /*
+             * Full technical error stays
+             * in Terminal only.
+             */
+            console.error(
+                "Meme generation failed:",
+                error
+            );
+
+            /*
+             * Users receive ONLY this
+             * friendly message.
+             */
+            return NextResponse.json(
+                {
+                    error:
+                        "Couldn’t generate this one. Try again in a moment.",
+                },
+                {
+                    status: 503,
+                }
+            );
+        }
+
+
+        /*
+         * ========================================
+         * 10. SUCCESS
+         * ========================================
+         */
 
         return NextResponse.json(
             {
-                error: `Gemini error: ${message}`,
+                caption:
+                result.caption,
+
+                model:
+                result.model,
+            },
+            {
+                status: 200,
+            }
+        );
+
+    } catch (error) {
+
+        /*
+         * Final safety net.
+         */
+        console.error(
+            "Unexpected /api/generate-caption error:",
+            error
+        );
+
+        return NextResponse.json(
+            {
+                error:
+                    "Couldn’t generate this one. Try again in a moment.",
             },
             {
                 status: 500,
