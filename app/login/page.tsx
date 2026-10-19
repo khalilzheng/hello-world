@@ -1,148 +1,251 @@
 "use client";
 
-import Link from "next/link";
-import { useMemo, useState } from "react";
-import { createClient } from "@/utils/supabase/client";
+import {
+    useEffect,
+    useMemo,
+    useState,
+} from "react";
+
+import {
+    useRouter,
+} from "next/navigation";
+
+import {
+    createClient,
+} from "@/utils/supabase/client";
+
 import styles from "../AuthPage.module.css";
 
-export default function LoginPage() {
-    const supabase = useMemo(
-        () => createClient(),
-        []
-    );
 
-    const [loading, setLoading] =
+export default function LoginPage() {
+    const router =
+        useRouter();
+
+    const supabase =
+        useMemo(
+            () =>
+                createClient(),
+            []
+        );
+
+    const [
+        loading,
+        setLoading,
+    ] =
         useState(false);
 
-    const [errorMessage, setErrorMessage] =
+    const [
+        error,
+        setError,
+    ] =
         useState("");
 
-    async function loginWithGoogle() {
-        try {
-            setLoading(true);
-            setErrorMessage("");
 
-            const redirectTo =
-                `${window.location.origin}/auth/callback`;
+    /*
+     * If browser already has a valid session,
+     * do not leave the user staring at Log in.
+     */
 
-            const { error } =
-                await supabase.auth.signInWithOAuth({
-                    provider: "google",
+    useEffect(() => {
+        let mounted = true;
+
+        async function checkExistingSession() {
+            const {
+                data: { user },
+            } =
+                await supabase.auth.getUser();
+
+            if (
+                mounted &&
+                user
+            ) {
+                router.replace(
+                    "/dashboard"
+                );
+
+                router.refresh();
+            }
+        }
+
+        void checkExistingSession();
+
+        return () => {
+            mounted = false;
+        };
+    }, [
+        router,
+        supabase,
+    ]);
+
+
+    async function signInWithGoogle() {
+        setLoading(true);
+        setError("");
+
+        const redirectTo =
+            `${window.location.origin}/auth/callback`;
+
+        const {
+            error:
+                oauthError,
+        } =
+            await supabase.auth.signInWithOAuth(
+                {
+                    provider:
+                        "google",
 
                     options: {
                         redirectTo,
 
-                        /*
-                         * Always let the user choose
-                         * which Google account to use.
-                         */
                         queryParams: {
-                            prompt: "select_account",
+                            prompt:
+                                "select_account",
                         },
                     },
-                });
+                }
+            );
 
-            if (error) {
-                throw error;
-            }
-        } catch (error) {
-            console.warn(error);
-
-            setErrorMessage(
-                error instanceof Error
-                    ? error.message
-                    : "Could not log in with Google."
+        if (
+            oauthError
+        ) {
+            setError(
+                oauthError.message
             );
 
             setLoading(false);
         }
     }
 
+
     return (
-        <main className={styles.page}>
+        <main
+            className={
+                styles.page
+            }
+        >
             <div
-                className={styles.backgroundGlow}
+                className={
+                    styles.backgroundGlow
+                }
             />
 
-            <Link
-                href="/dashboard"
-                className={styles.brand}
+            <button
+                type="button"
+                className={
+                    styles.brand
+                }
+                onClick={() =>
+                    router.push(
+                        "/dashboard"
+                    )
+                }
             >
         <span
-            className={styles.brandMark}
+            className={
+                styles.brandMark
+            }
         >
           M
         </span>
 
-                <span>Meme Lab</span>
-            </Link>
+                Meme Lab
+            </button>
 
             <section
-                className={styles.authCard}
+                className={
+                    styles.authCard
+                }
             >
-                <p className={styles.eyebrow}>
+                <p
+                    className={
+                        styles.eyebrow
+                    }
+                >
                     WELCOME BACK
                 </p>
 
-                <h1>Log in to Meme Lab.</h1>
+                <h1>
+                    Log in to Meme Lab.
+                </h1>
 
                 <p
-                    className={styles.description}
+                    className={
+                        styles.description
+                    }
                 >
-                    Continue creating AI memes,
-                    voting on campus humor, and
-                    exploring the community.
+                    Create, post, and
+                    vote on campus memes.
                 </p>
 
                 <button
                     type="button"
-                    className={styles.googleButton}
-                    disabled={loading}
+                    className={
+                        styles.googleButton
+                    }
+                    disabled={
+                        loading
+                    }
                     onClick={() =>
-                        void loginWithGoogle()
+                        void signInWithGoogle()
                     }
                 >
           <span
-              className={styles.googleIcon}
+              className={
+                  styles.googleIcon
+              }
           >
             G
           </span>
 
-                    <span>
-            {loading
-                ? "Connecting..."
-                : "Continue with Google"}
-          </span>
+                    {loading
+                        ? "Opening Google..."
+                        : "Continue with Google"}
                 </button>
 
-                {errorMessage && (
-                    <p className={styles.error}>
-                        {errorMessage}
+                {error && (
+                    <p
+                        className={
+                            styles.error
+                        }
+                    >
+                        {error}
                     </p>
                 )}
 
                 <div
-                    className={styles.divider}
+                    className={
+                        styles.divider
+                    }
                 >
                     <span />
-                    <p>New to Meme Lab?</p>
+                    <small>
+                        NEW HERE?
+                    </small>
                     <span />
                 </div>
 
-                <Link
-                    href="/signup"
+                <button
+                    type="button"
                     className={
                         styles.secondaryButton
                     }
+                    onClick={() =>
+                        router.push(
+                            "/signup"
+                        )
+                    }
                 >
                     Sign up for free
-                </Link>
+                </button>
 
                 <p
-                    className={styles.footerText}
+                    className={
+                        styles.footerText
+                    }
                 >
-                    Your memes and votes stay
-                    connected to your account.
+                    You can browse the
+                    community without an
+                    account.
                 </p>
             </section>
         </main>

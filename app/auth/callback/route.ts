@@ -1,161 +1,477 @@
-import { NextResponse } from "next/server";
-import { createClient } from "@/utils/supabase/server";
+import {
+    NextResponse,
+} from "next/server";
+
+import {
+    createClient,
+} from "@/utils/supabase/server";
+
+import {
+    RESUME_MEME_COOKIE,
+} from "@/app/lib/pendingMeme";
+
+
+export const dynamic =
+    "force-dynamic";
+
+export const revalidate =
+    0;
+
+
+/*
+ * =========================================================
+ * NO-CACHE REDIRECT
+ * =========================================================
+ */
+
+function redirectNoStore(
+    destination: URL
+) {
+    const response =
+        NextResponse.redirect(
+            destination
+        );
+
+    response.headers.set(
+        "Cache-Control",
+        "no-store, no-cache, must-revalidate, max-age=0"
+    );
+
+    response.headers.set(
+        "Pragma",
+        "no-cache"
+    );
+
+    return response;
+}
+
+
+/*
+ * =========================================================
+ * DEFAULT DISPLAY NAME
+ * =========================================================
+ *
+ * We intentionally use the part BEFORE @.
+ *
+ * Example:
+ *
+ * jialangzheng@gmail.com
+ *
+ * becomes:
+ *
+ * jialangzheng
+ *
+ * We do NOT force Google full name.
+ * The user can change their profile later.
+ */
+
+function getDefaultDisplayName(
+    email:
+        | string
+        | undefined
+        | null
+) {
+    if (
+        !email
+    ) {
+        return "Meme user";
+    }
+
+    const emailName =
+        email
+            .split("@")[0]
+            ?.trim();
+
+    return (
+        emailName ||
+        "Meme user"
+    );
+}
+
+
+/*
+ * =========================================================
+ * COOKIE HELPER
+ * =========================================================
+ */
+
+function hasResumeMemeCookie(
+    request: Request
+) {
+    const cookieHeader =
+        request.headers.get(
+            "cookie"
+        ) ?? "";
+
+    const cookies =
+        cookieHeader
+            .split(";")
+            .map(
+                (cookie) =>
+                    cookie.trim()
+            );
+
+    return cookies.some(
+        (cookie) =>
+            cookie ===
+            `${RESUME_MEME_COOKIE}=1`
+    );
+}
+
+
+/*
+ * =========================================================
+ * OAUTH CALLBACK
+ * =========================================================
+ */
 
 export async function GET(
     request: Request
 ) {
     const requestUrl =
-        new URL(request.url);
+        new URL(
+            request.url
+        );
 
     const code =
         requestUrl.searchParams.get(
             "code"
         );
 
-    const origin =
-        requestUrl.origin;
 
     /*
-     * OAuth callback must contain
-     * an authorization code.
+     * =====================================================
+     * VALIDATE OAUTH CODE
+     * =====================================================
      */
-    if (!code) {
-        return NextResponse.redirect(
+
+    if (
+        !code
+    ) {
+        return redirectNoStore(
             new URL(
                 "/login?error=missing_code",
-                origin
+                requestUrl.origin
             )
         );
     }
+
 
     const supabase =
         await createClient();
 
-    /*
-     * Exchange OAuth authorization
-     * code for a Supabase session.
-     */
-    const {
-        error: exchangeError,
-    } =
-        await supabase.auth.exchangeCodeForSession(
-            code
-        );
 
-    if (exchangeError) {
+    /*
+     * =====================================================
+     * EXCHANGE CODE FOR SESSION
+     * =====================================================
+     *
+     * This writes the user's authenticated
+     * Supabase session cookies.
+     */
+
+    const {
+        error:
+            exchangeError,
+    } =
+        await supabase.auth
+            .exchangeCodeForSession(
+                code
+            );
+
+
+    if (
+        exchangeError
+    ) {
         console.error(
-            "OAuth exchange error:",
+            "OAuth exchange failed:",
             exchangeError
         );
 
-        return NextResponse.redirect(
+        return redirectNoStore(
             new URL(
                 "/login?error=oauth",
-                origin
+                requestUrl.origin
             )
         );
     }
 
+
     /*
-     * Get authenticated user.
+     * =====================================================
+     * VERIFY USER
+     * =====================================================
      */
+
     const {
-        data: { user },
-        error: userError,
+        data: {
+            user,
+        },
+
+        error:
+            userError,
     } =
         await supabase.auth.getUser();
+
 
     if (
         userError ||
         !user
     ) {
         console.error(
-            "Authenticated user error:",
+            "Session exists but user could not be verified:",
             userError
         );
 
-        return NextResponse.redirect(
+        return redirectNoStore(
             new URL(
                 "/login?error=session",
-                origin
+                requestUrl.origin
             )
         );
     }
 
+
     /*
-     * Check Meme Lab profile.
+     * =====================================================
+     * DEFAULT PROFILE NAME
+     * =====================================================
      *
-     * Your database trigger automatically
-     * creates a profiles row for every
-     * new Supabase user.
+     * Every authenticated user should have
+     * a useful public display name even if
+     * they never touch Profile settings.
      */
+
+    const defaultDisplayName =
+        getDefaultDisplayName(
+            user.email
+        );
+
+
+    /*
+     * First see whether the profile already exists.
+     *
+     * IMPORTANT:
+     *
+     * We do NOT overwrite names that the user
+     * manually entered before.
+     */
+
     const {
-        data: profile,
-        error: profileError,
+        data:
+            existingProfile,
+
+        error:
+            profileReadError,
     } =
         await supabase
-            .from("profiles")
-            .select(
-                "id, first_name, last_name"
+            .from(
+                "profiles"
             )
+            .select(`
+                id,
+                first_name,
+                last_name
+            `)
             .eq(
                 "id",
                 user.id
             )
             .maybeSingle();
 
-    if (profileError) {
-        console.error(
-            "Profile lookup error:",
-            profileError
+
+    if (
+        profileReadError
+    ) {
+        console.warn(
+            "Could not read profile during OAuth:",
+            profileReadError
         );
+    }
+
+
+    /*
+     * =====================================================
+     * PROFILE DOES NOT EXIST
+     * =====================================================
+     *
+     * Create a minimal profile automatically.
+     *
+     * The user does NOT need to edit it.
+     */
+
+    if (
+        !existingProfile
+    ) {
+        const {
+            error:
+                insertProfileError,
+        } =
+            await supabase
+                .from(
+                    "profiles"
+                )
+                .insert({
+                    id:
+                    user.id,
+
+                    first_name:
+                    defaultDisplayName,
+
+                    /*
+                     * Last name is deliberately optional.
+                     *
+                     * We don't invent one.
+                     */
+                    last_name:
+                        "",
+                });
+
 
         /*
-         * Safer fallback:
-         * don't accidentally treat the
-         * user as fully onboarded.
+         * A profile trigger could theoretically
+         * create the row at nearly the same time.
+         *
+         * Don't destroy the login flow because of
+         * a harmless duplicate-profile race.
          */
-        return NextResponse.redirect(
+        if (
+            insertProfileError &&
+            insertProfileError.code !==
+            "23505"
+        ) {
+            console.warn(
+                "Could not create default profile:",
+                insertProfileError
+            );
+        }
+    }
+
+
+    /*
+     * =====================================================
+     * PROFILE EXISTS BUT HAS NO NAME
+     * =====================================================
+     *
+     * Example:
+     *
+     * first_name = ""
+     * last_name  = ""
+     *
+     * Fix only the first name.
+     *
+     * If the user already entered a real name,
+     * leave it completely untouched.
+     */
+
+    else {
+        const firstName =
+            existingProfile
+                .first_name
+                ?.trim() ??
+            "";
+
+        const lastName =
+            existingProfile
+                .last_name
+                ?.trim() ??
+            "";
+
+
+        /*
+         * Only fill a default if BOTH are blank.
+         *
+         * This means:
+         *
+         * John / ""
+         *
+         * stays John.
+         *
+         * "" / Smith
+         *
+         * stays Smith.
+         */
+
+        if (
+            !firstName &&
+            !lastName
+        ) {
+            const {
+                error:
+                    updateProfileError,
+            } =
+                await supabase
+                    .from(
+                        "profiles"
+                    )
+                    .update({
+                        first_name:
+                        defaultDisplayName,
+                    })
+                    .eq(
+                        "id",
+                        user.id
+                    );
+
+
+            if (
+                updateProfileError
+            ) {
+                console.warn(
+                    "Could not add default profile name:",
+                    updateProfileError
+                );
+            }
+        }
+    }
+
+
+    /*
+     * =====================================================
+     * GUEST MEME SIGNUP
+     * =====================================================
+     *
+     * If this account was created from:
+     *
+     * Try Meme Lab
+     *      ↓
+     * Save this meme — sign up free
+     *
+     * take them directly back to the
+     * saved preview.
+     *
+     * DO NOT go to Profile.
+     */
+
+    if (
+        hasResumeMemeCookie(
+            request
+        )
+    ) {
+        return redirectNoStore(
             new URL(
-                "/profile?welcome=1",
-                origin
+                "/dashboard?resume=meme",
+                requestUrl.origin
             )
         );
     }
 
-    const firstName =
-        profile?.first_name?.trim() ?? "";
-
-    const lastName =
-        profile?.last_name?.trim() ?? "";
 
     /*
-     * Brand-new account OR
-     * account that never finished
-     * profile onboarding.
+     * =====================================================
+     * NORMAL SIGNUP / LOGIN
+     * =====================================================
+     *
+     * No onboarding wall.
+     * No forced profile editing.
+     *
+     * User lands directly inside Meme Lab.
      */
-    const profileIncomplete =
-        !profile ||
-        !firstName ||
-        !lastName;
 
-    if (profileIncomplete) {
-        return NextResponse.redirect(
-            new URL(
-                "/profile?welcome=1",
-                origin
-            )
-        );
-    }
-
-    /*
-     * Returning user with a
-     * completed profile.
-     */
-    return NextResponse.redirect(
+    return redirectNoStore(
         new URL(
-            "/dashboard",
-            origin
+            "/dashboard?auth=1",
+            requestUrl.origin
         )
     );
 }

@@ -1,23 +1,19 @@
 "use client";
 
 import Link from "next/link";
-
 import {
     useCallback,
     useEffect,
+    useLayoutEffect,
     useMemo,
     useState,
 } from "react";
+import { useRouter } from "next/navigation";
 
-import { createClient } from "@/utils/supabase/client";
 import SiteNav from "@/app/components/SiteNav";
+import { createClient } from "@/utils/supabase/client";
 
 import styles from "./PublicProfile.module.css";
-
-type Props = {
-    profileUserId: string;
-    viewerUserId: string | null;
-};
 
 type PublicProfile = {
     id: string;
@@ -28,66 +24,30 @@ type PublicProfile = {
 
 type Generation = {
     id: string;
-    user_id: string;
     created_at: string;
+    user_id: string;
     image_url: string;
     prompt: string;
     caption: string;
 };
 
-type VoteCountRow = {
-    generation_id: string;
-    funny: number | string;
-    not_funny: number | string;
-    score: number | string;
-};
-
 type VoteCount = {
+    generation_id: string;
     funny: number;
-    notFunny: number;
+    not_funny: number;
     score: number;
 };
 
-function getName(
-    profile: PublicProfile
-) {
-    const first =
-        profile.first_name?.trim() ??
-        "";
-
-    const last =
-        profile.last_name?.trim() ??
-        "";
-
-    return (
-        `${first} ${last}`.trim() ||
-        "Meme Lab user"
-    );
-}
-
-function getInitials(
-    profile: PublicProfile
-) {
-    return (
-        `${
-            profile.first_name
-                ?.trim()
-                .charAt(0) ??
-            ""
-        }${
-            profile.last_name
-                ?.trim()
-                .charAt(0) ??
-            ""
-        }`.toUpperCase() ||
-        "M"
-    );
-}
+type PublicProfileClientProps = {
+    profileUserId: string;
+};
 
 export default function PublicProfileClient({
                                                 profileUserId,
-                                                viewerUserId,
-                                            }: Props) {
+                                            }: PublicProfileClientProps) {
+    const router =
+        useRouter();
+
     const supabase =
         useMemo(
             () =>
@@ -96,30 +56,39 @@ export default function PublicProfileClient({
         );
 
     const [
+        currentUserId,
+        setCurrentUserId,
+    ] =
+        useState<
+            string | null
+        >(null);
+
+    const [
         profile,
         setProfile,
     ] =
-        useState<PublicProfile | null>(
-            null
-        );
+        useState<
+            PublicProfile | null
+        >(null);
 
     const [
-        generations,
-        setGenerations,
+        posts,
+        setPosts,
     ] =
-        useState<Generation[]>(
-            []
-        );
+        useState<
+            Generation[]
+        >([]);
 
     const [
         voteCounts,
         setVoteCounts,
-    ] = useState<
-        Record<
-            string,
-            VoteCount
-        >
-    >({});
+    ] =
+        useState<
+            Record<
+                string,
+                VoteCount
+            >
+        >({});
 
     const [
         loading,
@@ -128,18 +97,173 @@ export default function PublicProfileClient({
         useState(true);
 
     const [
-        notFound,
-        setNotFound,
+        errorMessage,
+        setErrorMessage,
     ] =
-        useState(false);
+        useState("");
 
-    const loadData =
+    /*
+     * ======================================================
+     * CRITICAL SCROLL FIX
+     *
+     * When entering /user/[id], always start at the top.
+     * This fixes the page opening halfway down at Posts.
+     * ======================================================
+     */
+
+    useLayoutEffect(() => {
+        if (
+            "scrollRestoration" in
+            window.history
+        ) {
+            window.history.scrollRestoration =
+                "manual";
+        }
+
+        window.scrollTo(
+            0,
+            0
+        );
+
+        document.documentElement.scrollTop =
+            0;
+
+        document.body.scrollTop =
+            0;
+
+        requestAnimationFrame(
+            () => {
+                window.scrollTo(
+                    0,
+                    0
+                );
+            }
+        );
+    }, [
+        profileUserId,
+    ]);
+
+    /*
+     * Run it again after loading,
+     * because image/layout rendering can sometimes
+     * make browsers restore the old scroll position.
+     */
+
+    useEffect(() => {
+        if (loading) {
+            return;
+        }
+
+        const timer =
+            window.setTimeout(
+                () => {
+                    window.scrollTo({
+                        top: 0,
+                        left: 0,
+                        behavior:
+                            "auto",
+                    });
+
+                    document.documentElement.scrollTop =
+                        0;
+
+                    document.body.scrollTop =
+                        0;
+                },
+                0
+            );
+
+        return () =>
+            window.clearTimeout(
+                timer
+            );
+    }, [
+        loading,
+        profileUserId,
+    ]);
+
+    /*
+     * ======================================================
+     * AUTH
+     * ======================================================
+     */
+
+    useEffect(() => {
+        let mounted = true;
+
+        async function loadUser() {
+            const {
+                data: { user },
+            } =
+                await supabase.auth.getUser();
+
+            if (!mounted) {
+                return;
+            }
+
+            setCurrentUserId(
+                user?.id ??
+                null
+            );
+        }
+
+        void loadUser();
+
+        const {
+            data: {
+                subscription,
+            },
+        } =
+            supabase.auth.onAuthStateChange(
+                (
+                    _event,
+                    session
+                ) => {
+                    if (
+                        !mounted
+                    ) {
+                        return;
+                    }
+
+                    setCurrentUserId(
+                        session
+                            ?.user
+                            ?.id ??
+                        null
+                    );
+                }
+            );
+
+        return () => {
+            mounted = false;
+
+            subscription.unsubscribe();
+        };
+    }, [supabase]);
+
+    /*
+     * ======================================================
+     * LOAD PUBLIC PROFILE
+     * ======================================================
+     */
+
+    const loadProfile =
         useCallback(
             async () => {
+                setLoading(
+                    true
+                );
+
+                setErrorMessage(
+                    ""
+                );
+
                 try {
-                    setLoading(
-                        true
-                    );
+                    /*
+                     * --------------------------------------
+                     * PUBLIC PROFILE
+                     * --------------------------------------
+                     */
 
                     const {
                         data:
@@ -162,113 +286,187 @@ export default function PublicProfileClient({
                         throw profileError;
                     }
 
-                    const profileRows =
-                        (profileData ??
-                            []) as PublicProfile[];
-
-                    const foundProfile =
-                        profileRows[0] ??
-                        null;
+                    const rawProfile =
+                        Array.isArray(
+                            profileData
+                        )
+                            ? profileData[0]
+                            : profileData;
 
                     if (
-                        !foundProfile
+                        !rawProfile
                     ) {
-                        setNotFound(
-                            true
+                        setProfile(
+                            null
+                        );
+
+                        setPosts(
+                            []
+                        );
+
+                        setErrorMessage(
+                            "This profile could not be found."
                         );
 
                         return;
                     }
 
+                    const raw =
+                        rawProfile as {
+                            id?: string;
+                            user_id?: string;
+                            first_name?: string | null;
+                            last_name?: string | null;
+                            avatar_url?: string | null;
+                        };
+
+                    const normalizedProfile: PublicProfile =
+                        {
+                            id:
+                                raw.id ??
+                                raw.user_id ??
+                                profileUserId,
+
+                            first_name:
+                                raw.first_name ??
+                                null,
+
+                            last_name:
+                                raw.last_name ??
+                                null,
+
+                            avatar_url:
+                                raw.avatar_url ??
+                                null,
+                        };
+
                     setProfile(
-                        foundProfile
+                        normalizedProfile
                     );
+
+                    /*
+                     * --------------------------------------
+                     * THIS USER'S POSTS
+                     * --------------------------------------
+                     */
 
                     const {
                         data:
-                            postData,
+                            generationRows,
 
                         error:
-                            postError,
+                            generationError,
                     } =
-                        await supabase.rpc(
-                            "get_public_user_posts",
-                            {
-                                target_user_id:
-                                profileUserId,
-                            }
-                        );
+                        await supabase
+                            .from(
+                                "generations"
+                            )
+                            .select(`
+                                id,
+                                created_at,
+                                user_id,
+                                image_url,
+                                prompt,
+                                caption
+                            `)
+                            .eq(
+                                "user_id",
+                                profileUserId
+                            )
+                            .order(
+                                "created_at",
+                                {
+                                    ascending:
+                                        false,
+                                }
+                            );
 
                     if (
-                        postError
+                        generationError
                     ) {
-                        throw postError;
+                        throw generationError;
                     }
 
-                    setGenerations(
-                        (postData ??
-                            []) as Generation[]
+                    const safePosts =
+                        (generationRows ??
+                            []) as Generation[];
+
+                    setPosts(
+                        safePosts
                     );
+
+                    /*
+                     * --------------------------------------
+                     * PUBLIC VOTE COUNTS
+                     * --------------------------------------
+                     */
 
                     const {
                         data:
-                            votesData,
+                            countRows,
 
                         error:
-                            votesError,
+                            countError,
                     } =
                         await supabase.rpc(
                             "get_public_vote_counts"
                         );
 
                     if (
-                        votesError
+                        countError
                     ) {
-                        throw votesError;
+                        console.warn(
+                            countError
+                        );
                     }
 
-                    const map: Record<
+                    const nextCounts: Record<
                         string,
                         VoteCount
                     > = {};
 
-                    for (
-                        const row of
-                        (votesData ??
-                            []) as VoteCountRow[]
-                        ) {
-                        map[
-                            row.generation_id
-                            ] = {
-                            funny:
-                                Number(
-                                    row.funny
-                                ),
+                    (
+                        (countRows ??
+                            []) as VoteCount[]
+                    ).forEach(
+                        (row) => {
+                            nextCounts[
+                                row.generation_id
+                                ] = {
+                                generation_id:
+                                row.generation_id,
 
-                            notFunny:
-                                Number(
-                                    row.not_funny
-                                ),
+                                funny:
+                                    Number(
+                                        row.funny
+                                    ) ||
+                                    0,
 
-                            score:
-                                Number(
-                                    row.score
-                                ),
-                        };
-                    }
+                                not_funny:
+                                    Number(
+                                        row.not_funny
+                                    ) ||
+                                    0,
+
+                                score:
+                                    Number(
+                                        row.score
+                                    ) ||
+                                    0,
+                            };
+                        }
+                    );
 
                     setVoteCounts(
-                        map
+                        nextCounts
                     );
-                } catch (
-                    error
-                    ) {
+                } catch (error) {
                     console.warn(
                         error
                     );
 
-                    setNotFound(
-                        true
+                    setErrorMessage(
+                        "Couldn’t load this profile."
                     );
                 } finally {
                     setLoading(
@@ -283,138 +481,332 @@ export default function PublicProfileClient({
         );
 
     useEffect(() => {
-        void loadData();
-    }, [loadData]);
+        void loadProfile();
+    }, [
+        loadProfile,
+    ]);
 
-    const totalFunny =
-        generations.reduce(
-            (
-                total,
-                post
-            ) =>
-                total +
-                (voteCounts[
-                        post.id
-                        ]?.funny ??
-                    0),
-            0
+    /*
+     * ======================================================
+     * DERIVED PROFILE DATA
+     * ======================================================
+     */
+
+    const displayName =
+        useMemo(() => {
+            if (
+                !profile
+            ) {
+                return "";
+            }
+
+            const name = [
+                profile.first_name,
+                profile.last_name,
+            ]
+                .filter(
+                    Boolean
+                )
+                .join(" ")
+                .trim();
+
+            return (
+                name ||
+                "Campus creator"
+            );
+        }, [
+            profile,
+        ]);
+
+    const totalFunnyVotes =
+        useMemo(() => {
+            return posts.reduce(
+                (
+                    total,
+                    post
+                ) => {
+                    const count =
+                        voteCounts[
+                            post.id
+                            ];
+
+                    return (
+                        total +
+                        (count?.funny ??
+                            0)
+                    );
+                },
+                0
+            );
+        }, [
+            posts,
+            voteCounts,
+        ]);
+
+    function formatDate(
+        value: string
+    ) {
+        return new Intl.DateTimeFormat(
+            "en-US",
+            {
+                month:
+                    "short",
+                day:
+                    "numeric",
+                timeZone:
+                    "UTC",
+            }
+        ).format(
+            new Date(
+                value
+            )
         );
+    }
+
+    /*
+     * ======================================================
+     * NAV
+     * ======================================================
+     */
+
+    function goHome() {
+        router.push(
+            "/dashboard"
+        );
+    }
+
+    function goCreate() {
+        router.push(
+            "/dashboard?focus=create"
+        );
+    }
+
+    function goExplore() {
+        router.push(
+            "/dashboard?view=explore"
+        );
+    }
+
+    /*
+     * ======================================================
+     * LOADING
+     * ======================================================
+     */
 
     if (loading) {
         return (
-            <>
+            <main
+                className={
+                    styles.page
+                }
+            >
                 <SiteNav
                     userId={
-                        viewerUserId
+                        currentUserId
+                    }
+                    onHomeClick={
+                        goHome
+                    }
+                    onCreateClick={
+                        goCreate
+                    }
+                    onExploreClick={
+                        goExplore
                     }
                 />
 
-                <main
+                <section
                     className={
-                        styles.loading
+                        styles.loadingState
                     }
                 >
-                    Loading profile...
-                </main>
-            </>
+                    <div
+                        className={
+                            styles.loadingDot
+                        }
+                    />
+
+                    Loading profile…
+                </section>
+            </main>
         );
     }
+
+    /*
+     * ======================================================
+     * ERROR
+     * ======================================================
+     */
 
     if (
         !profile ||
-        notFound
+        errorMessage
     ) {
         return (
-            <>
+            <main
+                className={
+                    styles.page
+                }
+            >
                 <SiteNav
                     userId={
-                        viewerUserId
+                        currentUserId
+                    }
+                    onHomeClick={
+                        goHome
+                    }
+                    onCreateClick={
+                        goCreate
+                    }
+                    onExploreClick={
+                        goExplore
                     }
                 />
 
-                <main
+                <section
                     className={
-                        styles.loading
+                        styles.notFound
                     }
                 >
-                    <div>
-                        <h1>
-                            Profile not found
-                        </h1>
+                    <p>
+                        COMMUNITY PROFILE
+                    </p>
 
-                        <Link href="/dashboard">
-                            Return to Meme Lab
-                        </Link>
-                    </div>
-                </main>
-            </>
+                    <h1>
+                        Profile unavailable.
+                    </h1>
+
+                    <span>
+                        {errorMessage ||
+                            "This profile could not be found."}
+                    </span>
+
+                    <button
+                        type="button"
+                        onClick={
+                            goExplore
+                        }
+                    >
+                        Explore memes
+                    </button>
+                </section>
+            </main>
         );
     }
 
+    /*
+     * ======================================================
+     * PAGE
+     * ======================================================
+     */
+
     return (
-        <main className={styles.page}>
+        <main
+            className={
+                styles.page
+            }
+        >
             <SiteNav
                 userId={
-                    viewerUserId
+                    currentUserId
+                }
+                onHomeClick={
+                    goHome
+                }
+                onCreateClick={
+                    goCreate
+                }
+                onExploreClick={
+                    goExplore
                 }
             />
 
+            {/* =================================================
+                PROFILE HERO
+            ================================================= */}
+
             <section
                 className={
-                    styles.hero
+                    styles.profileHero
                 }
             >
                 <div
                     className={
-                        styles.heroInner
+                        styles.profileHeroInner
                     }
                 >
-                    {profile.avatar_url ? (
-                        /* eslint-disable-next-line @next/next/no-img-element */
-                        <img
-                            src={
-                                profile.avatar_url
-                            }
-                            alt={
-                                getName(
-                                    profile
-                                )
-                            }
-                            className={
-                                styles.avatar
-                            }
-                        />
-                    ) : (
-                        <div
-                            className={
-                                styles.avatarFallback
-                            }
-                        >
-                            {getInitials(
-                                profile
-                            )}
-                        </div>
-                    )}
-
                     <div
                         className={
-                            styles.identity
+                            styles.identityArea
                         }
                     >
-                        <p>
-                            COMMUNITY PROFILE
-                        </p>
-
-                        <h1>
-                            {getName(
-                                profile
+                        <div
+                            className={
+                                styles.largeAvatar
+                            }
+                        >
+                            {profile.avatar_url ? (
+                                <img
+                                    src={
+                                        profile.avatar_url
+                                    }
+                                    alt={`${displayName} profile`}
+                                />
+                            ) : (
+                                <span>
+                                    {displayName
+                                        .charAt(
+                                            0
+                                        )
+                                        .toUpperCase()}
+                                </span>
                             )}
-                        </h1>
+                        </div>
 
-                        <span>
-              Creating campus chaos,
-              one meme at a time.
-            </span>
+                        <div
+                            className={
+                                styles.identityCopy
+                            }
+                        >
+                            <p
+                                className={
+                                    styles.eyebrow
+                                }
+                            >
+                                COMMUNITY PROFILE
+                            </p>
+
+                            <h1>
+                                {
+                                    displayName
+                                }
+                            </h1>
+
+                            <p
+                                className={
+                                    styles.tagline
+                                }
+                            >
+                                Creating campus chaos, one meme at a time.
+                            </p>
+
+                            {currentUserId ===
+                                profileUserId && (
+                                    <button
+                                        type="button"
+                                        className={
+                                            styles.editProfileButton
+                                        }
+                                        onClick={() =>
+                                            router.push(
+                                                "/profile"
+                                            )
+                                        }
+                                    >
+                                        Edit profile
+                                    </button>
+                                )}
+                        </div>
                     </div>
 
                     <div
@@ -422,36 +814,48 @@ export default function PublicProfileClient({
                             styles.stats
                         }
                     >
-                        <div>
+                        <div
+                            className={
+                                styles.statCard
+                            }
+                        >
                             <strong>
                                 {
-                                    generations.length
+                                    posts.length
                                 }
                             </strong>
 
                             <span>
-                Posts
-              </span>
+                                Posts
+                            </span>
                         </div>
 
-                        <div>
+                        <div
+                            className={
+                                styles.statCard
+                            }
+                        >
                             <strong>
                                 {
-                                    totalFunny
+                                    totalFunnyVotes
                                 }
                             </strong>
 
                             <span>
-                Funny votes
-              </span>
+                                Funny votes
+                            </span>
                         </div>
                     </div>
                 </div>
             </section>
 
+            {/* =================================================
+                POSTS
+            ================================================= */}
+
             <section
                 className={
-                    styles.posts
+                    styles.postsSection
                 }
             >
                 <div
@@ -460,7 +864,11 @@ export default function PublicProfileClient({
                     }
                 >
                     <div>
-                        <p>
+                        <p
+                            className={
+                                styles.postsEyebrow
+                            }
+                        >
                             CREATIONS
                         </p>
 
@@ -469,107 +877,119 @@ export default function PublicProfileClient({
                         </h2>
                     </div>
 
-                    <span>
-            {
-                generations.length
-            }{" "}
-                        {generations.length ===
+                    <span
+                        className={
+                            styles.postCount
+                        }
+                    >
+                        {
+                            posts.length
+                        }{" "}
+                        {posts.length ===
                         1
                             ? "post"
                             : "posts"}
-          </span>
+                    </span>
                 </div>
 
-                <div
-                    className={
-                        styles.grid
-                    }
-                >
-                    {generations.map(
-                        (
-                            post
-                        ) => {
-                            const funny =
-                                voteCounts[
-                                    post.id
-                                    ]?.funny ??
-                                0;
+                {posts.length ===
+                0 ? (
+                    <div
+                        className={
+                            styles.emptyPosts
+                        }
+                    >
+                        <p>
+                            No memes yet.
+                        </p>
 
-                            return (
-                                <Link
-                                    href={`/meme/${post.id}`}
-                                    key={
+                        <span>
+                            This creator hasn&apos;t posted anything yet.
+                        </span>
+                    </div>
+                ) : (
+                    <div
+                        className={
+                            styles.postsGrid
+                        }
+                    >
+                        {posts.map(
+                            (
+                                post
+                            ) => {
+                                const funny =
+                                    voteCounts[
                                         post.id
-                                    }
-                                    className={
-                                        styles.card
-                                    }
-                                >
-                                    <div
+                                        ]
+                                        ?.funny ??
+                                    0;
+
+                                return (
+                                    <Link
+                                        key={
+                                            post.id
+                                        }
+                                        href={`/meme/${post.id}`}
+                                        scroll={
+                                            true
+                                        }
                                         className={
-                                            styles.imageWrap
+                                            styles.postCard
                                         }
                                     >
-                                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                                        <img
-                                            src={
-                                                post.image_url
+                                        <div
+                                            className={
+                                                styles.postImage
                                             }
-                                            alt={
-                                                post.caption
-                                            }
-                                        />
-                                    </div>
-
-                                    <div
-                                        className={
-                                            styles.cardBody
-                                        }
-                                    >
-                                        <h3>
-                                            {
-                                                post.caption
-                                            }
-                                        </h3>
-
-                                        <p>
-                                            Prompt:{" "}
-                                            {
-                                                post.prompt
-                                            }
-                                        </p>
+                                        >
+                                            <img
+                                                src={
+                                                    post.image_url
+                                                }
+                                                alt=""
+                                            />
+                                        </div>
 
                                         <div
                                             className={
-                                                styles.meta
+                                                styles.postBody
                                             }
                                         >
-                                            <strong>
-                                                ↑ Funny{" "}
-                                                {funny}
-                                            </strong>
+                                            <h3>
+                                                {
+                                                    post.caption
+                                                }
+                                            </h3>
 
-                                            <span>
-                        {new Date(
-                            post.created_at
-                        ).toLocaleDateString(
-                            undefined,
-                            {
-                                month:
-                                    "short",
+                                            <div
+                                                className={
+                                                    styles.postMeta
+                                                }
+                                            >
+                                                <span
+                                                    className={
+                                                        styles.funnyCount
+                                                    }
+                                                >
+                                                    ↑ Funny{" "}
+                                                    {
+                                                        funny
+                                                    }
+                                                </span>
 
-                                day:
-                                    "numeric",
+                                                <span>
+                                                    {formatDate(
+                                                        post.created_at
+                                                    )}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </Link>
+                                );
                             }
                         )}
-                      </span>
-                                        </div>
-                                    </div>
-                                </Link>
-                            );
-                        }
-                    )}
-                </div>
+                    </div>
+                )}
             </section>
         </main>
     );

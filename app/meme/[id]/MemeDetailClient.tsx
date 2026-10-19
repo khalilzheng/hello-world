@@ -3,228 +3,213 @@
 import Link from "next/link";
 
 import {
-    useCallback,
-    useEffect,
+    MouseEvent,
     useMemo,
+    useRef,
     useState,
 } from "react";
 
-import { useRouter } from "next/navigation";
+import {
+    flushSync,
+} from "react-dom";
 
-import { createClient } from "@/utils/supabase/client";
+import {
+    useRouter,
+} from "next/navigation";
+
+import {
+    createClient,
+} from "@/utils/supabase/client";
 
 import SiteNav from "@/app/components/SiteNav";
 
 import styles from "./MemeDetail.module.css";
 
-
-type Generation = {
+type Post = {
     id: string;
-    user_id: string;
+
     created_at: string;
+
+    user_id: string;
+
     image_url: string;
-    prompt: string;
+
     caption: string;
 };
 
-
-type PublicProfile = {
+type Profile = {
     id: string;
-    first_name: string | null;
-    last_name: string | null;
-    avatar_url: string | null;
+
+    first_name:
+        | string
+        | null;
+
+    last_name:
+        | string
+        | null;
+
+    avatar_url:
+        | string
+        | null;
 };
 
-
-type UserVote = {
+type RelatedPost = {
     id: string;
+
+    created_at: string;
+
     user_id: string;
-    generation_id: string;
-    vote: number;
-};
 
+    image_url: string;
 
-type VoteCountRow = {
-    generation_id: string;
-    funny: number | string;
-    not_funny: number | string;
-    score: number | string;
-};
+    caption: string;
 
-
-type VoteCount = {
     funny: number;
-    notFunny: number;
-    score: number;
+
+    not_funny: number;
 };
-
-
-type VoteEffect = {
-    value: 1 | -1;
-    key: number;
-};
-
 
 type Props = {
-    memeId: string;
-    userId: string | null;
-    initiallyCreated: boolean;
+    post: Post;
+
+    profile: Profile;
+
+    currentUserId:
+        | string
+        | null;
+
+    initialFunny: number;
+
+    initialNotFunny: number;
+
+    initialUserVote:
+        | 1
+        | -1
+        | null;
+
+    showCreatedIntro:
+        boolean;
+
+    relatedPosts:
+        RelatedPost[];
 };
 
-
-function getDisplayName(
-    profile: PublicProfile | null
-) {
-    if (!profile) {
-        return "Meme Lab user";
-    }
-
-    const first =
-        profile.first_name?.trim() ?? "";
-
-    const last =
-        profile.last_name?.trim() ?? "";
-
-    return (
-        `${first} ${last}`.trim() ||
-        "Meme Lab user"
-    );
-}
-
-
-function getInitials(
-    profile: PublicProfile | null
-) {
-    if (!profile) {
-        return "M";
-    }
-
-    const first =
-        profile.first_name
-            ?.trim()
-            .charAt(0) ?? "";
-
-    const last =
-        profile.last_name
-            ?.trim()
-            .charAt(0) ?? "";
-
-    return (
-        `${first}${last}`.toUpperCase() ||
-        "M"
-    );
-}
-
-
-function getStoragePath(
-    imageUrl: string
-) {
-    const marker =
-        "/storage/v1/object/public/meme-images/";
-
-    const index =
-        imageUrl.indexOf(marker);
-
-    if (index === -1) {
-        return null;
-    }
-
-    return decodeURIComponent(
-        imageUrl.slice(
-            index + marker.length
-        )
-    );
-}
-
-
-function VoteParticles() {
-    return (
-        <span
-            className={styles.voteParticles}
-            aria-hidden="true"
-        >
-      <span />
-      <span />
-      <span />
-      <span />
-      <span />
-      <span />
-    </span>
-    );
-}
-
-
 export default function MemeDetailClient({
-                                             memeId,
-                                             userId,
-                                             initiallyCreated,
+                                             post,
+                                             profile,
+                                             currentUserId,
+                                             initialFunny,
+                                             initialNotFunny,
+                                             initialUserVote,
+                                             showCreatedIntro,
+                                             relatedPosts,
                                          }: Props) {
-    const router = useRouter();
+    const router =
+        useRouter();
 
-    const supabase = useMemo(
-        () => createClient(),
-        []
-    );
-
-
-    const [
-        generation,
-        setGeneration,
-    ] =
-        useState<Generation | null>(
-            null
+    const supabase =
+        useMemo(
+            () =>
+                createClient(),
+            []
         );
 
+    /*
+     * ======================================================
+     * CREATED INTRO
+     * ======================================================
+     */
 
     const [
-        profile,
-        setProfile,
+        showIntro,
+        setShowIntro,
     ] =
-        useState<PublicProfile | null>(
-            null
+        useState(
+            showCreatedIntro
         );
 
+    /*
+     * ======================================================
+     * VOTING
+     * ======================================================
+     */
 
     const [
-        recommendations,
-        setRecommendations,
+        funnyCount,
+        setFunnyCount,
     ] =
-        useState<Generation[]>([]);
-
+        useState(
+            initialFunny
+        );
 
     const [
-        voteCount,
-        setVoteCount,
+        notFunnyCount,
+        setNotFunnyCount,
     ] =
-        useState<VoteCount>({
-            funny: 0,
-            notFunny: 0,
-            score: 0,
-        });
-
+        useState(
+            initialNotFunny
+        );
 
     const [
         userVote,
         setUserVote,
     ] =
-        useState<UserVote | null>(
-            null
+        useState<
+            1 | -1 | null
+        >(
+            initialUserVote
         );
 
-
     const [
-        loading,
-        setLoading,
+        voteFlash,
+        setVoteFlash,
     ] =
-        useState(true);
-
+        useState<
+            | "funny"
+            | "notFunny"
+            | null
+        >(null);
 
     const [
-        voting,
-        setVoting,
+        savingVote,
+        setSavingVote,
     ] =
         useState(false);
 
+    const [
+        voteError,
+        setVoteError,
+    ] =
+        useState("");
+
+    /*
+     * Prevent duplicate vote requests.
+     *
+     * We do NOT disable the button
+     * visually because that was making
+     * voting feel like a page reload.
+     */
+
+    const voteLockRef =
+        useRef(false);
+
+    /*
+     * ======================================================
+     * AUTH MODAL
+     * ======================================================
+     */
+
+    const [
+        showAuthModal,
+        setShowAuthModal,
+    ] =
+        useState(false);
+
+    /*
+     * ======================================================
+     * DELETE
+     * ======================================================
+     */
 
     const [
         deleting,
@@ -232,454 +217,305 @@ export default function MemeDetailClient({
     ] =
         useState(false);
 
+    /*
+     * ======================================================
+     * DISPLAY DATA
+     * ======================================================
+     */
 
-    const [
-        errorMessage,
-        setErrorMessage,
-    ] =
-        useState("");
+    const displayName =
+        [
+            profile.first_name,
+            profile.last_name,
+        ]
+            .filter(Boolean)
+            .join(" ")
+            .trim() ||
+        "Campus creator";
 
+    const isMine =
+        currentUserId ===
+        post.user_id;
 
-    const [
-        showLoginModal,
-        setShowLoginModal,
-    ] =
-        useState(false);
+    const score =
+        funnyCount -
+        notFunnyCount;
 
-
-    const [
-        revealVisible,
-        setRevealVisible,
-    ] =
-        useState(
-            initiallyCreated
-        );
-
-
-    const [
-        revealLeaving,
-        setRevealLeaving,
-    ] =
-        useState(false);
-
-
-    const [
-        voteEffect,
-        setVoteEffect,
-    ] =
-        useState<VoteEffect | null>(
-            null
-        );
-
-
-    const isOwner =
-        Boolean(
-            userId &&
-            generation &&
-            userId ===
-            generation.user_id
-        );
-
-
-    /* =========================================================
-       VOTE EFFECT
-       ========================================================= */
-
-    function triggerVoteEffect(
-        value: 1 | -1
+    function formatDate(
+        value: string
     ) {
-        const key = Date.now();
+        const date =
+            new Date(value);
 
-        setVoteEffect({
-            value,
-            key,
-        });
+        return new Intl.DateTimeFormat(
+            "en-US",
+            {
+                month:
+                    "long",
 
-        window.setTimeout(
-            () => {
-                setVoteEffect(
-                    (current) => {
-                        if (
-                            current?.key ===
-                            key
-                        ) {
-                            return null;
-                        }
+                day:
+                    "numeric",
 
-                        return current;
-                    }
-                );
-            },
-            680
-        );
+                year:
+                    "numeric",
+
+                timeZone:
+                    "UTC",
+            }
+        ).format(date);
     }
 
+    /*
+     * ======================================================
+     * BACK BUTTON
+     * ======================================================
+     *
+     * If the user came from Explore / Home / Profile,
+     * router.back() sends them exactly where they were.
+     *
+     * If they opened this meme directly in a new tab,
+     * fall back to Explore.
+     */
 
-    /* =========================================================
-       LOAD VOTE COUNT
-       ========================================================= */
-
-    const loadVoteCount =
-        useCallback(
-            async () => {
-                const {
-                    data,
-                    error,
-                } =
-                    await supabase.rpc(
-                        "get_public_vote_counts"
-                    );
-
-                if (error) {
-                    throw error;
-                }
-
-                const row = (
-                    (data ??
-                        []) as VoteCountRow[]
-                ).find(
-                    (item) =>
-                        item.generation_id ===
-                        memeId
-                );
-
-                if (!row) {
-                    setVoteCount({
-                        funny: 0,
-                        notFunny: 0,
-                        score: 0,
-                    });
-
-                    return;
-                }
-
-                setVoteCount({
-                    funny: Number(
-                        row.funny
-                    ),
-
-                    notFunny: Number(
-                        row.not_funny
-                    ),
-
-                    score: Number(
-                        row.score
-                    ),
-                });
-            },
-            [supabase, memeId]
-        );
-
-
-    /* =========================================================
-       LOAD PAGE
-       ========================================================= */
-
-    const loadPage =
-        useCallback(
-            async () => {
-                try {
-                    setLoading(true);
-
-                    const {
-                        data: memeData,
-                        error: memeError,
-                    } =
-                        await supabase
-                            .from(
-                                "generations"
-                            )
-                            .select(
-                                "id, user_id, created_at, image_url, prompt, caption"
-                            )
-                            .eq(
-                                "id",
-                                memeId
-                            )
-                            .single();
-
-                    if (memeError) {
-                        throw memeError;
-                    }
-
-                    const meme =
-                        memeData as Generation;
-
-                    setGeneration(meme);
-
-
-                    const [
-                        profilesResult,
-                        recommendationsResult,
-                    ] =
-                        await Promise.all([
-                            supabase.rpc(
-                                "get_public_profiles"
-                            ),
-
-                            supabase
-                                .from(
-                                    "generations"
-                                )
-                                .select(
-                                    "id, user_id, created_at, image_url, prompt, caption"
-                                )
-                                .neq(
-                                    "id",
-                                    memeId
-                                )
-                                .order(
-                                    "created_at",
-                                    {
-                                        ascending:
-                                            false,
-                                    }
-                                )
-                                .limit(12),
-                        ]);
-
-
-                    if (
-                        profilesResult.error
-                    ) {
-                        throw profilesResult.error;
-                    }
-
-
-                    if (
-                        recommendationsResult.error
-                    ) {
-                        throw recommendationsResult.error;
-                    }
-
-
-                    const allProfiles =
-                        (profilesResult.data ??
-                            []) as PublicProfile[];
-
-
-                    const memeProfile =
-                        allProfiles.find(
-                            (item) =>
-                                item.id ===
-                                meme.user_id
-                        ) ?? null;
-
-
-                    setProfile(
-                        memeProfile
-                    );
-
-
-                    const allRecommendations =
-                        (recommendationsResult.data ??
-                            []) as Generation[];
-
-
-                    const shuffled = [
-                        ...allRecommendations,
-                    ].sort(
-                        () =>
-                            Math.random() -
-                            0.5
-                    );
-
-
-                    setRecommendations(
-                        shuffled.slice(
-                            0,
-                            3
-                        )
-                    );
-
-
-                    await loadVoteCount();
-
-
-                    if (userId) {
-                        const {
-                            data: voteData,
-                            error: voteError,
-                        } =
-                            await supabase
-                                .from(
-                                    "votes"
-                                )
-                                .select(
-                                    "id, user_id, generation_id, vote"
-                                )
-                                .eq(
-                                    "user_id",
-                                    userId
-                                )
-                                .eq(
-                                    "generation_id",
-                                    memeId
-                                )
-                                .maybeSingle();
-
-
-                        if (voteError) {
-                            throw voteError;
-                        }
-
-
-                        setUserVote(
-                            voteData
-                                ? (voteData as UserVote)
-                                : null
-                        );
-                    } else {
-                        setUserVote(null);
-                    }
-                } catch (error) {
-                    console.warn(
-                        error
-                    );
-
-                    setErrorMessage(
-                        "This meme could not be loaded."
-                    );
-                } finally {
-                    setLoading(false);
-                }
-            },
-            [
-                supabase,
-                memeId,
-                userId,
-                loadVoteCount,
-            ]
-        );
-
-
-    useEffect(() => {
-        void loadPage();
-    }, [loadPage]);
-
-
-    /* =========================================================
-       JUST GENERATED REVEAL
-       ========================================================= */
-
-    useEffect(() => {
+    function handleBack() {
         if (
-            !initiallyCreated ||
-            !generation
+            typeof window !==
+            "undefined" &&
+            window.history.length >
+            1
         ) {
+            router.back();
+
             return;
         }
 
-        setRevealVisible(true);
-
-
-        const leavingTimer =
-            window.setTimeout(
-                () => {
-                    setRevealLeaving(
-                        true
-                    );
-                },
-                2500
-            );
-
-
-        const hideTimer =
-            window.setTimeout(
-                () => {
-                    setRevealVisible(
-                        false
-                    );
-
-                    setRevealLeaving(
-                        false
-                    );
-
-                    window.history.replaceState(
-                        {},
-                        "",
-                        `/meme/${memeId}`
-                    );
-                },
-                3150
-            );
-
-
-        return () => {
-            window.clearTimeout(
-                leavingTimer
-            );
-
-            window.clearTimeout(
-                hideTimer
-            );
-        };
-    }, [
-        initiallyCreated,
-        generation,
-        memeId,
-    ]);
-
-
-    function closeReveal() {
-        setRevealLeaving(true);
-
-        window.setTimeout(
-            () => {
-                setRevealVisible(
-                    false
-                );
-
-                setRevealLeaving(
-                    false
-                );
-
-                window.history.replaceState(
-                    {},
-                    "",
-                    `/meme/${memeId}`
-                );
-            },
-            460
+        router.push(
+            "/dashboard?view=explore"
         );
     }
 
+    /*
+     * ======================================================
+     * VOTE FLASH
+     * ======================================================
+     */
 
-    /* =========================================================
-       VOTING
-       ========================================================= */
-
-    async function submitVote(
-        value: 1 | -1
+    function triggerVoteFlash(
+        type:
+            | "funny"
+            | "notFunny"
     ) {
-        if (!userId) {
-            setShowLoginModal(
+        setVoteFlash(
+            null
+        );
+
+        requestAnimationFrame(
+            () => {
+                requestAnimationFrame(
+                    () => {
+                        setVoteFlash(
+                            type
+                        );
+
+                        window.setTimeout(
+                            () => {
+                                setVoteFlash(
+                                    null
+                                );
+                            },
+                            650
+                        );
+                    }
+                );
+            }
+        );
+    }
+
+    /*
+     * ======================================================
+     * OPTIMISTIC VOTING
+     * ======================================================
+     *
+     * UI updates FIRST.
+     *
+     * Supabase saves SECOND.
+     *
+     * NO refresh.
+     * NO router.refresh().
+     * NO reload.
+     * ======================================================
+     */
+
+    async function handleVote(
+        event:
+        MouseEvent<HTMLButtonElement>,
+
+        requestedVote:
+            1 | -1
+    ) {
+        event.preventDefault();
+
+        event.stopPropagation();
+
+        if (
+            !currentUserId
+        ) {
+            setShowAuthModal(
                 true
             );
 
             return;
         }
 
-
-        if (!generation) {
+        if (
+            voteLockRef.current
+        ) {
             return;
         }
 
+        voteLockRef.current =
+            true;
+
+        setVoteError("");
+
+        /*
+         * Snapshot old state.
+         */
+
+        const previousVote =
+            userVote;
+
+        const previousFunny =
+            funnyCount;
+
+        const previousNotFunny =
+            notFunnyCount;
+
+        /*
+         * Clicking selected vote again
+         * removes the vote.
+         */
+
+        const nextVote:
+            | 1
+            | -1
+            | null =
+            previousVote ===
+            requestedVote
+                ? null
+                : requestedVote;
+
+        let nextFunny =
+            previousFunny;
+
+        let nextNotFunny =
+            previousNotFunny;
+
+        /*
+         * Remove previous vote.
+         */
+
+        if (
+            previousVote ===
+            1
+        ) {
+            nextFunny =
+                Math.max(
+                    0,
+                    nextFunny -
+                    1
+                );
+        }
+
+        if (
+            previousVote ===
+            -1
+        ) {
+            nextNotFunny =
+                Math.max(
+                    0,
+                    nextNotFunny -
+                    1
+                );
+        }
+
+        /*
+         * Add new vote.
+         */
+
+        if (
+            nextVote ===
+            1
+        ) {
+            nextFunny += 1;
+        }
+
+        if (
+            nextVote ===
+            -1
+        ) {
+            nextNotFunny +=
+                1;
+        }
+
+        /*
+         * Update the screen immediately.
+         */
+
+        flushSync(
+            () => {
+                setUserVote(
+                    nextVote
+                );
+
+                setFunnyCount(
+                    nextFunny
+                );
+
+                setNotFunnyCount(
+                    nextNotFunny
+                );
+
+                setSavingVote(
+                    true
+                );
+            }
+        );
+
+        /*
+         * Run animation immediately.
+         */
+
+        if (
+            nextVote ===
+            1
+        ) {
+            triggerVoteFlash(
+                "funny"
+            );
+        }
+
+        if (
+            nextVote ===
+            -1
+        ) {
+            triggerVoteFlash(
+                "notFunny"
+            );
+        }
+
+        /*
+         * Save in background.
+         */
 
         try {
-            setVoting(true);
-
-
             /*
-             * CLICKING THE SAME
-             * SELECTED VOTE AGAIN
-             * REMOVES IT.
+             * Remove vote.
              */
 
             if (
-                userVote &&
-                userVote.vote ===
-                value
+                nextVote ===
+                null
             ) {
                 const {
                     error,
@@ -690,31 +526,60 @@ export default function MemeDetailClient({
                         )
                         .delete()
                         .eq(
-                            "id",
-                            userVote.id
+                            "user_id",
+                            currentUserId
+                        )
+                        .eq(
+                            "generation_id",
+                            post.id
                         );
 
-
-                if (error) {
+                if (
+                    error
+                ) {
                     throw error;
                 }
-
-
-                setUserVote(null);
-
-                await loadVoteCount();
-
-                return;
             }
 
-
             /*
-             * CHANGE EXISTING VOTE
+             * First vote.
              */
 
-            if (userVote) {
+            else if (
+                previousVote ===
+                null
+            ) {
                 const {
-                    data,
+                    error,
+                } =
+                    await supabase
+                        .from(
+                            "votes"
+                        )
+                        .insert({
+                            user_id:
+                            currentUserId,
+
+                            generation_id:
+                            post.id,
+
+                            vote:
+                            nextVote,
+                        });
+
+                if (
+                    error
+                ) {
+                    throw error;
+                }
+            }
+
+            /*
+             * Switch vote.
+             */
+
+            else {
+                const {
                     error,
                 } =
                     await supabase
@@ -722,157 +587,105 @@ export default function MemeDetailClient({
                             "votes"
                         )
                         .update({
-                            vote: value,
+                            vote:
+                            nextVote,
                         })
                         .eq(
-                            "id",
-                            userVote.id
+                            "user_id",
+                            currentUserId
                         )
-                        .select(
-                            "id, user_id, generation_id, vote"
-                        )
-                        .single();
+                        .eq(
+                            "generation_id",
+                            post.id
+                        );
 
-
-                if (error) {
+                if (
+                    error
+                ) {
                     throw error;
                 }
-
-
-                setUserVote(
-                    data as UserVote
-                );
-
-
-                await loadVoteCount();
-
-
-                triggerVoteEffect(
-                    value
-                );
-
-                return;
             }
-
 
             /*
-             * CREATE NEW VOTE
+             * IMPORTANT:
+             *
+             * Nothing else happens here.
+             *
+             * No refresh.
              */
-
-            const {
-                data,
-                error,
-            } =
-                await supabase
-                    .from(
-                        "votes"
-                    )
-                    .insert({
-                        user_id:
-                        userId,
-
-                        generation_id:
-                        generation.id,
-
-                        vote: value,
-                    })
-                    .select(
-                        "id, user_id, generation_id, vote"
-                    )
-                    .single();
-
-
-            if (error) {
-                throw error;
-            }
-
-
-            setUserVote(
-                data as UserVote
-            );
-
-
-            await loadVoteCount();
-
-
-            triggerVoteEffect(
-                value
-            );
-        } catch (error) {
+        } catch (
+            error
+            ) {
             console.warn(
+                "Vote failed:",
                 error
             );
 
-            setErrorMessage(
-                "Could not save your vote."
+            /*
+             * Roll back only if Supabase fails.
+             */
+
+            flushSync(
+                () => {
+                    setUserVote(
+                        previousVote
+                    );
+
+                    setFunnyCount(
+                        previousFunny
+                    );
+
+                    setNotFunnyCount(
+                        previousNotFunny
+                    );
+                }
+            );
+
+            setVoteError(
+                "Couldn’t save your vote. Try again."
             );
         } finally {
-            setVoting(false);
+            voteLockRef.current =
+                false;
+
+            setSavingVote(
+                false
+            );
         }
     }
 
-
-    /* =========================================================
-       DELETE POST
-       ========================================================= */
+    /*
+     * ======================================================
+     * DELETE POST
+     * ======================================================
+     */
 
     async function deletePost() {
         if (
-            !generation ||
-            !userId ||
-            generation.user_id !==
-            userId
+            !currentUserId ||
+            !isMine
         ) {
             return;
         }
 
-
         const confirmed =
             window.confirm(
-                "Delete this meme? This cannot be undone."
+                "Delete this post? This cannot be undone."
             );
 
-
-        if (!confirmed) {
+        if (
+            !confirmed
+        ) {
             return;
         }
 
+        setDeleting(
+            true
+        );
 
         try {
-            setDeleting(true);
-
-
-            const storagePath =
-                getStoragePath(
-                    generation.image_url
-                );
-
-
-            if (storagePath) {
-                const {
-                    error: storageError,
-                } =
-                    await supabase.storage
-                        .from(
-                            "meme-images"
-                        )
-                        .remove([
-                            storagePath,
-                        ]);
-
-
-                if (
-                    storageError
-                ) {
-                    console.warn(
-                        storageError
-                    );
-                }
-            }
-
-
             const {
-                error: deleteError,
+                error,
             } =
                 await supabase
                     .from(
@@ -881,552 +694,735 @@ export default function MemeDetailClient({
                     .delete()
                     .eq(
                         "id",
-                        generation.id
+                        post.id
                     )
                     .eq(
                         "user_id",
-                        userId
+                        currentUserId
                     );
 
-
-            if (deleteError) {
-                throw deleteError;
+            if (
+                error
+            ) {
+                throw error;
             }
 
-
             router.push(
-                "/dashboard#community"
+                "/dashboard?view=explore"
             );
-
-            router.refresh();
-        } catch (error) {
+        } catch (
+            error
+            ) {
             console.warn(
                 error
             );
 
-            setErrorMessage(
-                "Could not delete this meme."
+            setVoteError(
+                "Couldn’t delete this post."
             );
-        } finally {
-            setDeleting(false);
+
+            setDeleting(
+                false
+            );
         }
     }
 
-
-    /* =========================================================
-       LOADING
-       ========================================================= */
+    /*
+     * ======================================================
+     * JUST GENERATED SCREEN
+     * ======================================================
+     */
 
     if (
-        loading &&
-        !generation
+        showIntro
     ) {
         return (
             <main
                 className={
-                    styles.loadingPage
+                    styles.createdPage
                 }
             >
-                <SiteNav
-                    userId={userId}
-                />
-
                 <div
                     className={
-                        styles.loadingGlow
+                        styles.createdGlowOne
                     }
                 />
 
                 <div
                     className={
-                        styles.loadingContent
+                        styles.createdGlowTwo
+                    }
+                />
+
+                <div
+                    className={
+                        styles.createdContent
                     }
                 >
-          <span>
-            ✦
-          </span>
+                    <div
+                        className={
+                            styles.createdSpark
+                        }
+                    >
+                        ✦
+                    </div>
 
-                    <p>
-                        Loading creation
+                    <p
+                        className={
+                            styles.createdEyebrow
+                        }
+                    >
+                        JUST GENERATED
                     </p>
-                </div>
-            </main>
-        );
-    }
-
-
-    /* =========================================================
-       NOT FOUND
-       ========================================================= */
-
-    if (!generation) {
-        return (
-            <main
-                className={
-                    styles.errorPage
-                }
-            >
-                <SiteNav
-                    userId={userId}
-                />
-
-                <div>
-                    <p>404</p>
 
                     <h1>
-                        Meme not found.
+                        Your meme is live.
                     </h1>
 
-                    <Link href="/dashboard">
-                        Back to Meme Lab
-                    </Link>
+                    <div
+                        className={
+                            styles.createdImage
+                        }
+                    >
+                        <img
+                            src={
+                                post.image_url
+                            }
+                            alt=""
+                        />
+                    </div>
+
+                    <p
+                        className={
+                            styles.createdCaption
+                        }
+                    >
+                        “
+                        {
+                            post.caption
+                        }
+                        ”
+                    </p>
+
+                    <div
+                        className={
+                            styles.createdMeta
+                        }
+                    >
+                        <span>
+                            AI generated
+                        </span>
+
+                        <i>
+                            •
+                        </i>
+
+                        <span>
+                            Ready to vote
+                        </span>
+                    </div>
+
+                    <div
+                        className={
+                            styles.createdActions
+                        }
+                    >
+                        <button
+                            type="button"
+                            className={
+                                styles.viewPostButton
+                            }
+                            onClick={() => {
+                                setShowIntro(
+                                    false
+                                );
+
+                                window.history.replaceState(
+                                    null,
+                                    "",
+                                    `/meme/${post.id}`
+                                );
+                            }}
+                        >
+                            View your post
+
+                            <span>
+                                →
+                            </span>
+                        </button>
+
+                        <button
+                            type="button"
+                            className={
+                                styles.createdBackButton
+                            }
+                            onClick={
+                                handleBack
+                            }
+                        >
+                            ← Back to posts
+                        </button>
+                    </div>
                 </div>
             </main>
         );
     }
 
-
-    const funnyEffect =
-        voteEffect?.value === 1;
-
-
-    const notFunnyEffect =
-        voteEffect?.value === -1;
-
-
-    /* =========================================================
-       PAGE
-       ========================================================= */
+    /*
+     * ======================================================
+     * NORMAL DETAIL PAGE
+     * ======================================================
+     */
 
     return (
         <main
-            className={styles.page}
+            className={
+                styles.page
+            }
         >
             <SiteNav
-                userId={userId}
+                userId={
+                    currentUserId
+                }
+                onHomeClick={() =>
+                    router.push(
+                        "/dashboard"
+                    )
+                }
+                onCreateClick={() =>
+                    router.push(
+                        "/dashboard?focus=create"
+                    )
+                }
+                onExploreClick={() =>
+                    router.push(
+                        "/dashboard?view=explore"
+                    )
+                }
             />
 
+            {/* =================================================
+                BACK BUTTON
+            ================================================= */}
 
-            {/* =====================================================
-          MAIN DETAIL
-          ===================================================== */}
-
-            <section
+            <div
                 className={
-                    styles.detailSection
+                    styles.backBar
                 }
             >
-                <div
+                <button
+                    type="button"
                     className={
-                        styles.detailInner
+                        styles.backButton
+                    }
+                    onClick={
+                        handleBack
                     }
                 >
-                    <div
+                    <span
                         className={
-                            styles.imageColumn
+                            styles.backArrow
                         }
                     >
-                        <div
-                            className={
-                                styles.imageFrame
-                            }
-                        >
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                        ←
+                    </span>
 
-                            <img
-                                src={
-                                    generation.image_url
-                                }
-                                alt={
-                                    generation.caption
-                                }
-                            />
-                        </div>
-                    </div>
+                    Back to posts
+                </button>
+            </div>
 
-
-                    <div
-                        className={
-                            styles.infoColumn
-                        }
-                    >
-                        <p
-                            className={
-                                styles.detailEyebrow
-                            }
-                        >
-                            AI GENERATED MEME
-                        </p>
-
-
-                        <Link
-                            href={`/user/${generation.user_id}`}
-                            className={
-                                styles.author
-                            }
-                        >
-                            {profile?.avatar_url ? (
-                                /* eslint-disable-next-line @next/next/no-img-element */
-
-                                <img
-                                    src={
-                                        profile.avatar_url
-                                    }
-                                    alt={getDisplayName(
-                                        profile
-                                    )}
-                                />
-                            ) : (
-                                <span
-                                    className={
-                                        styles.avatarFallback
-                                    }
-                                >
-                  {getInitials(
-                      profile
-                  )}
-                </span>
-                            )}
-
-
-                            <div>
-                                <strong>
-                                    {getDisplayName(
-                                        profile
-                                    )}
-                                </strong>
-
-                                <span>
-                  View profile
-                </span>
-                            </div>
-                        </Link>
-
-
-                        <h1>
-                            {
-                                generation.caption
-                            }
-                        </h1>
-
-
-                        <div
-                            className={
-                                styles.promptCard
-                            }
-                        >
-              <span>
-                PROMPT
-              </span>
-
-                            <p>
-                                {
-                                    generation.prompt
-                                }
-                            </p>
-                        </div>
-
-
-                        <div
-                            className={
-                                styles.detailMeta
-                            }
-                        >
-              <span>
-                {new Date(
-                    generation.created_at
-                ).toLocaleDateString(
-                    undefined,
-                    {
-                        month:
-                            "long",
-
-                        day:
-                            "numeric",
-
-                        year:
-                            "numeric",
-                    }
-                )}
-              </span>
-
-                            <span>
-                Score{" "}
-                                {
-                                    voteCount.score
-                                }
-              </span>
-                        </div>
-
-
-                        {/* =================================================
-                VOTE DOCK
-                SAME EFFECT AS DASHBOARD
-                ================================================= */}
-
-                        <div
-                            className={
-                                styles.voteDock
-                            }
-                        >
-                            <button
-                                type="button"
-                                disabled={voting}
-                                onClick={() =>
-                                    void submitVote(
-                                        1
-                                    )
-                                }
-                                className={[
-                                    styles.voteButton,
-                                    styles.funnyButton,
-
-                                    userVote?.vote ===
-                                    1
-                                        ? styles.funnySelected
-                                        : "",
-
-                                    funnyEffect
-                                        ? styles.voteEffect
-                                        : "",
-                                ].join(" ")}
-                            >
-                                <VoteParticles />
-
-                                <span
-                                    className={
-                                        styles.voteIcon
-                                    }
-                                >
-                  ↑
-                </span>
-
-                                <span
-                                    className={
-                                        styles.voteLabel
-                                    }
-                                >
-                  Funny
-                </span>
-
-                                <strong
-                                    className={
-                                        styles.voteCount
-                                    }
-                                >
-                                    {
-                                        voteCount.funny
-                                    }
-                                </strong>
-                            </button>
-
-
-                            <button
-                                type="button"
-                                disabled={voting}
-                                onClick={() =>
-                                    void submitVote(
-                                        -1
-                                    )
-                                }
-                                className={[
-                                    styles.voteButton,
-                                    styles.notFunnyButton,
-
-                                    userVote?.vote ===
-                                    -1
-                                        ? styles.notFunnySelected
-                                        : "",
-
-                                    notFunnyEffect
-                                        ? styles.voteEffect
-                                        : "",
-                                ].join(" ")}
-                            >
-                                <VoteParticles />
-
-                                <span
-                                    className={
-                                        styles.voteIcon
-                                    }
-                                >
-                  ↓
-                </span>
-
-                                <span
-                                    className={
-                                        styles.voteLabel
-                                    }
-                                >
-                  Not Funny
-                </span>
-
-                                <strong
-                                    className={
-                                        styles.voteCount
-                                    }
-                                >
-                                    {
-                                        voteCount.notFunny
-                                    }
-                                </strong>
-                            </button>
-                        </div>
-
-
-                        {isOwner && (
-                            <button
-                                type="button"
-                                className={
-                                    styles.deleteButton
-                                }
-                                disabled={
-                                    deleting
-                                }
-                                onClick={() =>
-                                    void deletePost()
-                                }
-                            >
-                                {deleting
-                                    ? "Deleting..."
-                                    : "Delete post"}
-                            </button>
-                        )}
-
-
-                        {errorMessage && (
-                            <p
-                                className={
-                                    styles.errorMessage
-                                }
-                            >
-                                {
-                                    errorMessage
-                                }
-                            </p>
-                        )}
-                    </div>
-                </div>
-            </section>
-
-
-            {/* =====================================================
-          YOU MIGHT ALSO LIKE
-          ===================================================== */}
+            {/* =================================================
+                MAIN MEME
+            ================================================= */}
 
             <section
                 className={
-                    styles.relatedSection
+                    styles.detail
                 }
             >
                 <div
                     className={
-                        styles.relatedInner
+                        styles.imagePanel
+                    }
+                >
+                    <img
+                        src={
+                            post.image_url
+                        }
+                        alt=""
+                    />
+                </div>
+
+                <div
+                    className={
+                        styles.infoPanel
                     }
                 >
                     <p
                         className={
-                            styles.relatedEyebrow
+                            styles.eyebrow
                         }
                     >
-                        DISCOVER MORE
+                        AI GENERATED MEME
                     </p>
 
+                    <Link
+                        href={
+                            isMine
+                                ? "/profile"
+                                : `/user/${post.user_id}`
+                        }
+                        className={
+                            styles.creator
+                        }
+                    >
+                        <div
+                            className={
+                                styles.avatar
+                            }
+                        >
+                            {profile.avatar_url ? (
+                                <img
+                                    src={
+                                        profile.avatar_url
+                                    }
+                                    alt=""
+                                />
+                            ) : (
+                                <span>
+                                    {displayName
+                                        .charAt(
+                                            0
+                                        )
+                                        .toUpperCase()}
+                                </span>
+                            )}
+                        </div>
+
+                        <div>
+                            <strong>
+                                {
+                                    displayName
+                                }
+                            </strong>
+
+                            <small>
+                                View profile
+                            </small>
+                        </div>
+                    </Link>
+
+                    <h1
+                        className={
+                            styles.caption
+                        }
+                    >
+                        {
+                            post.caption
+                        }
+                    </h1>
 
                     <div
                         className={
-                            styles.relatedHeading
+                            styles.metadata
                         }
                     >
-                        <h2>
-                            You might also like
-                        </h2>
+                        <span>
+                            {formatDate(
+                                post.created_at
+                            )}
+                        </span>
 
-                        <Link
-                            href="/dashboard#community"
-                        >
-                            Explore all →
-                        </Link>
+                        <span>
+                            Score{" "}
+                            {
+                                score
+                            }
+                        </span>
                     </div>
 
+                    {/* =================================================
+                        VOTING
+                    ================================================= */}
+
+                    <div
+                        className={[
+                            styles.voteBar,
+
+                            voteFlash ===
+                            "funny"
+                                ? styles.voteBarFunnyFlash
+                                : "",
+
+                            voteFlash ===
+                            "notFunny"
+                                ? styles.voteBarNotFunnyFlash
+                                : "",
+                        ]
+                            .filter(
+                                Boolean
+                            )
+                            .join(
+                                " "
+                            )}
+                    >
+                        <button
+                            type="button"
+                            aria-pressed={
+                                userVote ===
+                                1
+                            }
+                            className={[
+                                styles.voteButton,
+
+                                userVote ===
+                                1
+                                    ? styles.funnySelected
+                                    : "",
+                            ]
+                                .filter(
+                                    Boolean
+                                )
+                                .join(
+                                    " "
+                                )}
+                            onPointerDown={(
+                                event
+                            ) => {
+                                event.stopPropagation();
+                            }}
+                            onClick={(
+                                event
+                            ) =>
+                                void handleVote(
+                                    event,
+                                    1
+                                )
+                            }
+                        >
+                            <span
+                                className={
+                                    styles.voteBackground
+                                }
+                            />
+
+                            <span
+                                className={
+                                    styles.voteIcon
+                                }
+                            >
+                                ↑
+                            </span>
+
+                            <span
+                                className={
+                                    styles.voteLabel
+                                }
+                            >
+                                Funny
+                            </span>
+
+                            <strong
+                                className={
+                                    styles.voteCount
+                                }
+                            >
+                                {
+                                    funnyCount
+                                }
+                            </strong>
+                        </button>
+
+                        <button
+                            type="button"
+                            aria-pressed={
+                                userVote ===
+                                -1
+                            }
+                            className={[
+                                styles.voteButton,
+
+                                userVote ===
+                                -1
+                                    ? styles.notFunnySelected
+                                    : "",
+                            ]
+                                .filter(
+                                    Boolean
+                                )
+                                .join(
+                                    " "
+                                )}
+                            onPointerDown={(
+                                event
+                            ) => {
+                                event.stopPropagation();
+                            }}
+                            onClick={(
+                                event
+                            ) =>
+                                void handleVote(
+                                    event,
+                                    -1
+                                )
+                            }
+                        >
+                            <span
+                                className={
+                                    styles.voteBackground
+                                }
+                            />
+
+                            <span
+                                className={
+                                    styles.voteIcon
+                                }
+                            >
+                                ↓
+                            </span>
+
+                            <span
+                                className={
+                                    styles.voteLabel
+                                }
+                            >
+                                Not Funny
+                            </span>
+
+                            <strong
+                                className={
+                                    styles.voteCount
+                                }
+                            >
+                                {
+                                    notFunnyCount
+                                }
+                            </strong>
+                        </button>
+                    </div>
 
                     <div
                         className={
-                            styles.relatedGrid
+                            styles.voteStatus
                         }
                     >
-                        {recommendations.map(
-                            (item) => (
-                                <Link
-                                    key={
-                                        item.id
-                                    }
-                                    href={`/meme/${item.id}`}
-                                    className={
-                                        styles.relatedCard
-                                    }
-                                >
-                                    <div
-                                        className={
-                                            styles.relatedImage
-                                        }
-                                    >
-                                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        {savingVote ? (
+                            <span
+                                className={
+                                    styles.savingIndicator
+                                }
+                            >
+                                <i />
 
-                                        <img
-                                            src={
-                                                item.image_url
-                                            }
-                                            alt={
-                                                item.caption
-                                            }
-                                        />
-                                    </div>
-
-
-                                    <div
-                                        className={
-                                            styles.relatedText
-                                        }
-                                    >
-                                        <p>
-                                            {
-                                                item.caption
-                                            }
-                                        </p>
-
-                                        <span>
-                      View meme →
-                    </span>
-                                    </div>
-                                </Link>
-                            )
+                                Saving
+                            </span>
+                        ) : userVote ===
+                        1 ? (
+                            <span>
+                                You voted Funny · Click again to undo
+                            </span>
+                        ) : userVote ===
+                        -1 ? (
+                            <span>
+                                You voted Not Funny · Click again to undo
+                            </span>
+                        ) : (
+                            <span>
+                                Vote for your reaction
+                            </span>
                         )}
                     </div>
+
+                    {voteError && (
+                        <p
+                            className={
+                                styles.error
+                            }
+                        >
+                            {
+                                voteError
+                            }
+                        </p>
+                    )}
+
+                    {isMine && (
+                        <button
+                            type="button"
+                            className={
+                                styles.deleteButton
+                            }
+                            disabled={
+                                deleting
+                            }
+                            onClick={() =>
+                                void deletePost()
+                            }
+                        >
+                            {deleting
+                                ? "Deleting..."
+                                : "Delete post"}
+                        </button>
+                    )}
                 </div>
             </section>
 
+            {/* =================================================
+                YOU MIGHT ALSO LIKE
+            ================================================= */}
 
-            {/* =====================================================
-          LOGIN MODAL
-          ===================================================== */}
+            {relatedPosts.length >
+                0 && (
+                    <section
+                        className={
+                            styles.relatedSection
+                        }
+                    >
+                        <div
+                            className={
+                                styles.relatedHeader
+                            }
+                        >
+                            <div>
+                                <p>
+                                    KEEP SCROLLING
+                                </p>
 
-            {showLoginModal && (
+                                <h2>
+                                    You might also like
+                                </h2>
+                            </div>
+
+                            <button
+                                type="button"
+                                onClick={() =>
+                                    router.push(
+                                        "/dashboard?view=explore"
+                                    )
+                                }
+                            >
+                                Explore all
+
+                                <span>
+                                →
+                            </span>
+                            </button>
+                        </div>
+
+                        <div
+                            className={
+                                styles.relatedGrid
+                            }
+                        >
+                            {relatedPosts
+                                .slice(
+                                    0,
+                                    3
+                                )
+                                .map(
+                                    (
+                                        related
+                                    ) => (
+                                        <Link
+                                            key={
+                                                related.id
+                                            }
+                                            href={`/meme/${related.id}`}
+                                            className={
+                                                styles.relatedCard
+                                            }
+                                        >
+                                            <div
+                                                className={
+                                                    styles.relatedImage
+                                                }
+                                            >
+                                                <img
+                                                    src={
+                                                        related.image_url
+                                                    }
+                                                    alt=""
+                                                />
+
+                                                <div
+                                                    className={
+                                                        styles.relatedImageShade
+                                                    }
+                                                />
+
+                                                <div
+                                                    className={
+                                                        styles.relatedVote
+                                                    }
+                                                >
+                                                <span>
+                                                    ↑
+                                                </span>
+
+                                                    {
+                                                        related.funny
+                                                    }
+                                                </div>
+                                            </div>
+
+                                            <div
+                                                className={
+                                                    styles.relatedBody
+                                                }
+                                            >
+                                                <h3>
+                                                    {
+                                                        related.caption
+                                                    }
+                                                </h3>
+
+                                                <div
+                                                    className={
+                                                        styles.relatedMeta
+                                                    }
+                                                >
+                                                <span>
+                                                    Funny{" "}
+                                                    {
+                                                        related.funny
+                                                    }
+                                                </span>
+
+                                                    <span>
+                                                    Score{" "}
+                                                        {
+                                                            related.funny -
+                                                            related.not_funny
+                                                        }
+                                                </span>
+                                                </div>
+                                            </div>
+                                        </Link>
+                                    )
+                                )}
+                        </div>
+                    </section>
+                )}
+
+            {/* =================================================
+                LOGIN MODAL
+            ================================================= */}
+
+            {showAuthModal && (
                 <div
                     className={
-                        styles.modalBackdrop
+                        styles.authBackdrop
                     }
-                    onMouseDown={() =>
-                        setShowLoginModal(
+                    onClick={() =>
+                        setShowAuthModal(
                             false
                         )
                     }
                 >
                     <div
                         className={
-                            styles.loginModal
+                            styles.authModal
                         }
-                        onMouseDown={(
+                        onClick={(
                             event
                         ) =>
                             event.stopPropagation()
@@ -1435,10 +1431,10 @@ export default function MemeDetailClient({
                         <button
                             type="button"
                             className={
-                                styles.modalClose
+                                styles.authClose
                             }
                             onClick={() =>
-                                setShowLoginModal(
+                                setShowAuthModal(
                                     false
                                 )
                             }
@@ -1446,203 +1442,67 @@ export default function MemeDetailClient({
                             ×
                         </button>
 
-
                         <div
                             className={
-                                styles.modalMark
+                                styles.authSpark
                             }
                         >
-                            M
+                            ↑
                         </div>
-
-
-                        <h2>
-                            Join the joke.
-                        </h2>
-
-
-                        <p>
-                            Log in to vote on
-                            campus memes.
-                        </p>
-
-
-                        <Link
-                            href="/signup"
-                            className={
-                                styles.modalPrimary
-                            }
-                        >
-                            Sign up for free
-                        </Link>
-
-
-                        <Link
-                            href="/login"
-                            className={
-                                styles.modalSecondary
-                            }
-                        >
-                            Already have an
-                            account? Log in
-                        </Link>
-                    </div>
-                </div>
-            )}
-
-
-            {/* =====================================================
-          JUST GENERATED REVEAL
-          ===================================================== */}
-
-            {revealVisible && (
-                <div
-                    className={[
-                        styles.revealOverlay,
-
-                        revealLeaving
-                            ? styles.revealLeaving
-                            : "",
-                    ].join(" ")}
-                >
-                    <div
-                        className={
-                            styles.revealAura
-                        }
-                    />
-
-
-                    <div
-                        className={
-                            styles.revealOrbOne
-                        }
-                    />
-
-
-                    <div
-                        className={
-                            styles.revealOrbTwo
-                        }
-                    />
-
-
-                    <div
-                        className={
-                            styles.revealParticles
-                        }
-                        aria-hidden="true"
-                    >
-                        <i />
-                        <i />
-                        <i />
-                        <i />
-                        <i />
-                        <i />
-                        <i />
-                        <i />
-                    </div>
-
-
-                    <div
-                        className={
-                            styles.revealContent
-                        }
-                    >
-                        <div
-                            className={
-                                styles.revealSpark
-                            }
-                        >
-                            ✦
-                        </div>
-
 
                         <p
                             className={
-                                styles.revealLabel
+                                styles.authEyebrow
                             }
                         >
-                            JUST GENERATED
+                            JOIN THE COMMUNITY
                         </p>
 
-
                         <h2>
-                            Your meme is live.
+                            Log in to vote.
                         </h2>
 
+                        <p
+                            className={
+                                styles.authDescription
+                            }
+                        >
+                            Votes are connected to accounts so community rankings stay fair.
+                        </p>
 
                         <div
                             className={
-                                styles.revealImageShell
+                                styles.authActions
                             }
                         >
-                            <div
+                            <button
+                                type="button"
                                 className={
-                                    styles.revealImageGlow
+                                    styles.authLogin
                                 }
-                            />
-
-
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-
-                            <img
-                                src={
-                                    generation.image_url
+                                onClick={() =>
+                                    router.push(
+                                        "/login"
+                                    )
                                 }
-                                alt={
-                                    generation.caption
+                            >
+                                Log in
+                            </button>
+
+                            <button
+                                type="button"
+                                className={
+                                    styles.authSignup
                                 }
-                            />
+                                onClick={() =>
+                                    router.push(
+                                        "/signup"
+                                    )
+                                }
+                            >
+                                Sign up for free
+                            </button>
                         </div>
-
-
-                        <p
-                            className={
-                                styles.revealCaption
-                            }
-                        >
-                            “
-                            {
-                                generation.caption
-                            }
-                            ”
-                        </p>
-
-
-                        <div
-                            className={
-                                styles.revealMeta
-                            }
-                        >
-              <span>
-                AI generated
-              </span>
-
-                            <span>
-                •
-              </span>
-
-                            <span>
-                Ready to vote
-              </span>
-                        </div>
-
-
-                        <button
-                            type="button"
-                            className={
-                                styles.revealButton
-                            }
-                            onClick={
-                                closeReveal
-                            }
-                        >
-                            View your post
-
-                            <span>
-                →
-              </span>
-                        </button>
                     </div>
                 </div>
             )}

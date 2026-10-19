@@ -1,150 +1,291 @@
 "use client";
 
-import Link from "next/link";
-import { useMemo, useState } from "react";
-import { createClient } from "@/utils/supabase/client";
+import {
+    useEffect,
+    useMemo,
+    useState,
+} from "react";
+
+import {
+    useRouter,
+} from "next/navigation";
+
+import {
+    createClient,
+} from "@/utils/supabase/client";
+
 import styles from "../AuthPage.module.css";
 
-export default function SignupPage() {
-    const supabase = useMemo(
-        () => createClient(),
-        []
-    );
 
-    const [loading, setLoading] =
+export default function SignupPage() {
+    const router =
+        useRouter();
+
+    const supabase =
+        useMemo(
+            () =>
+                createClient(),
+            []
+        );
+
+    const [
+        loading,
+        setLoading,
+    ] =
         useState(false);
 
-    const [errorMessage, setErrorMessage] =
+    const [
+        error,
+        setError,
+    ] =
         useState("");
 
+
+    /*
+     * ======================================================
+     * EXISTING SESSION
+     * ======================================================
+     *
+     * If someone who is already logged in
+     * accidentally opens /signup, just send
+     * them back to Meme Lab.
+     *
+     * We DO NOT send them to Profile.
+     */
+
+    useEffect(() => {
+        let mounted =
+            true;
+
+        async function checkExistingSession() {
+            const {
+                data: {
+                    user,
+                },
+            } =
+                await supabase.auth.getUser();
+
+            if (
+                mounted &&
+                user
+            ) {
+                router.replace(
+                    "/dashboard"
+                );
+
+                router.refresh();
+            }
+        }
+
+        void checkExistingSession();
+
+        return () => {
+            mounted =
+                false;
+        };
+    }, [
+        router,
+        supabase,
+    ]);
+
+
+    /*
+     * ======================================================
+     * GOOGLE SIGNUP
+     * ======================================================
+     */
+
     async function signUpWithGoogle() {
-        try {
-            setLoading(true);
-            setErrorMessage("");
+        setLoading(
+            true
+        );
 
-            const redirectTo =
-                `${window.location.origin}/auth/callback`;
+        setError("");
 
-            const { error } =
-                await supabase.auth.signInWithOAuth({
-                    provider: "google",
+        const redirectTo =
+            `${window.location.origin}/auth/callback`;
+
+        const {
+            error:
+                oauthError,
+        } =
+            await supabase.auth.signInWithOAuth(
+                {
+                    provider:
+                        "google",
 
                     options: {
                         redirectTo,
 
                         /*
-                         * IMPORTANT:
-                         * Even if Google is already signed in,
-                         * show the account chooser instead of
-                         * silently reusing the previous account.
+                         * Always show the Google
+                         * account chooser.
+                         *
+                         * This is useful for testing
+                         * and also prevents accidentally
+                         * reusing another person's account.
                          */
                         queryParams: {
-                            prompt: "select_account",
+                            prompt:
+                                "select_account",
                         },
                     },
-                });
-
-            if (error) {
-                throw error;
-            }
-        } catch (error) {
-            console.warn(error);
-
-            setErrorMessage(
-                error instanceof Error
-                    ? error.message
-                    : "Could not continue with Google."
+                }
             );
 
-            setLoading(false);
+        if (
+            oauthError
+        ) {
+            setError(
+                oauthError.message
+            );
+
+            setLoading(
+                false
+            );
         }
     }
 
+
     return (
-        <main className={styles.page}>
+        <main
+            className={
+                styles.page
+            }
+        >
             <div
-                className={styles.backgroundGlow}
+                className={
+                    styles.backgroundGlow
+                }
             />
 
-            <Link
-                href="/dashboard"
-                className={styles.brand}
+            <button
+                type="button"
+                className={
+                    styles.brand
+                }
+                onClick={() =>
+                    router.push(
+                        "/dashboard"
+                    )
+                }
             >
-        <span
-            className={styles.brandMark}
-        >
-          M
-        </span>
+                <span
+                    className={
+                        styles.brandMark
+                    }
+                >
+                    M
+                </span>
 
-                <span>Meme Lab</span>
-            </Link>
+                Meme Lab
+            </button>
 
             <section
-                className={styles.authCard}
+                className={
+                    styles.authCard
+                }
             >
-                <p className={styles.eyebrow}>
+                <p
+                    className={
+                        styles.eyebrow
+                    }
+                >
                     JOIN MEME LAB
                 </p>
 
-                <h1>Create your account.</h1>
+                <h1>
+                    Create your account.
+                </h1>
 
                 <p
-                    className={styles.description}
+                    className={
+                        styles.description
+                    }
                 >
-                    Create AI-powered campus memes,
-                    vote on community creations, and
-                    build your Meme Lab profile.
+                    Post your own AI memes,
+                    vote, and explore what
+                    everyone is making.
                 </p>
 
                 <button
                     type="button"
-                    className={styles.googleButton}
-                    disabled={loading}
+                    className={
+                        styles.googleButton
+                    }
+                    disabled={
+                        loading
+                    }
                     onClick={() =>
                         void signUpWithGoogle()
                     }
                 >
-          <span
-              className={styles.googleIcon}
-          >
-            G
-          </span>
+                    <span
+                        className={
+                            styles.googleIcon
+                        }
+                    >
+                        G
+                    </span>
 
-                    <span>
-            {loading
-                ? "Connecting..."
-                : "Sign up with Google"}
-          </span>
+                    {loading
+                        ? "Opening Google..."
+                        : "Sign up with Google"}
                 </button>
 
-                {errorMessage && (
-                    <p className={styles.error}>
-                        {errorMessage}
+                {error && (
+                    <p
+                        className={
+                            styles.error
+                        }
+                    >
+                        {error}
                     </p>
                 )}
 
                 <div
-                    className={styles.divider}
+                    className={
+                        styles.divider
+                    }
                 >
                     <span />
-                    <p>Already have an account?</p>
+
+                    <small>
+                        ALREADY A MEMBER?
+                    </small>
+
                     <span />
                 </div>
 
-                <Link
-                    href="/login"
+                <button
+                    type="button"
                     className={
                         styles.secondaryButton
                     }
+                    onClick={() =>
+                        router.push(
+                            "/login"
+                        )
+                    }
                 >
                     Log in
-                </Link>
+                </button>
 
+                {/*
+                 * IMPORTANT:
+                 *
+                 * We no longer tell people that
+                 * they must complete their profile.
+                 *
+                 * Profile editing is optional.
+                 */}
                 <p
-                    className={styles.footerText}
+                    className={
+                        styles.footerText
+                    }
                 >
-                    Your profile is created after
-                    signing in with Google.
+                    You can personalize your
+                    profile anytime.
                 </p>
             </section>
         </main>

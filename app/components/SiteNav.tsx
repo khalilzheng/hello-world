@@ -1,36 +1,131 @@
 "use client";
 
-import Link from "next/link";
-import {
-    usePathname,
-    useRouter,
-} from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
 
 import { createClient } from "@/utils/supabase/client";
+
 import styles from "./SiteNav.module.css";
 
-type Props = {
-    userId: string | null;
+type SiteNavProps = {
+    userId?: string | null;
+
     onHomeClick?: () => void;
     onCreateClick?: () => void;
     onExploreClick?: () => void;
 };
 
 export default function SiteNav({
-                                    userId,
+                                    userId = null,
                                     onHomeClick,
                                     onCreateClick,
                                     onExploreClick,
-                                }: Props) {
-    const pathname = usePathname();
+                                }: SiteNavProps) {
     const router = useRouter();
-    const supabase = createClient();
+    const pathname = usePathname();
 
-    const loggedIn = Boolean(userId);
-    const onProfilePage =
-        pathname === "/profile";
+    const supabase = useMemo(
+        () => createClient(),
+        []
+    );
 
-    function goHome() {
+    /*
+     * IMPORTANT:
+     *
+     * We do NOT blindly trust the server prop forever.
+     * After OAuth, Supabase may update the browser session
+     * before an old rendered page knows about it.
+     *
+     * This local auth state fixes that.
+     */
+    const [currentUserId, setCurrentUserId] =
+        useState<string | null>(userId);
+
+    const lastUserIdRef =
+        useRef<string | null>(userId);
+
+    useEffect(() => {
+        let mounted = true;
+
+        async function syncAuth() {
+            const {
+                data: { user },
+            } = await supabase.auth.getUser();
+
+            if (!mounted) {
+                return;
+            }
+
+            const nextUserId =
+                user?.id ?? null;
+
+            setCurrentUserId(nextUserId);
+
+            /*
+             * If the server rendered one auth state,
+             * but the browser has another, refresh the
+             * server components once.
+             */
+            if (
+                nextUserId !==
+                lastUserIdRef.current
+            ) {
+                lastUserIdRef.current =
+                    nextUserId;
+
+                router.refresh();
+            }
+        }
+
+        void syncAuth();
+
+        const {
+            data: {
+                subscription,
+            },
+        } =
+            supabase.auth.onAuthStateChange(
+                (_event, session) => {
+                    const nextUserId =
+                        session?.user?.id ??
+                        null;
+
+                    setCurrentUserId(
+                        nextUserId
+                    );
+
+                    if (
+                        nextUserId !==
+                        lastUserIdRef.current
+                    ) {
+                        lastUserIdRef.current =
+                            nextUserId;
+
+                        router.refresh();
+                    }
+                }
+            );
+
+        return () => {
+            mounted = false;
+            subscription.unsubscribe();
+        };
+    }, [
+        router,
+        supabase,
+    ]);
+
+    async function handleLogout() {
+        await supabase.auth.signOut();
+
+        setCurrentUserId(null);
+        lastUserIdRef.current = null;
+
+        router.replace("/dashboard");
+        router.refresh();
+    }
+
+    function handleHome() {
         if (onHomeClick) {
             onHomeClick();
             return;
@@ -39,129 +134,142 @@ export default function SiteNav({
         router.push("/dashboard");
     }
 
-    function goCreate() {
+    function handleCreate() {
         if (onCreateClick) {
             onCreateClick();
             return;
         }
 
-        router.push("/dashboard#create");
+        router.push(
+            "/dashboard?focus=create"
+        );
     }
 
-    function goExplore() {
+    function handleExplore() {
         if (onExploreClick) {
             onExploreClick();
             return;
         }
 
         router.push(
-            "/dashboard#community"
+            "/dashboard?view=explore"
         );
     }
 
-    async function handleLogout() {
-        try {
-            await supabase.auth.signOut();
-
-            router.push("/dashboard");
-            router.refresh();
-        } catch (error) {
-            console.warn(error);
-        }
-    }
-
     return (
-        <header className={styles.nav}>
-            <div className={styles.navInner}>
+        <header
+            className={styles.nav}
+        >
+            <button
+                type="button"
+                className={styles.brand}
+                onClick={handleHome}
+            >
+        <span
+            className={
+                styles.brandMark
+            }
+        >
+          M
+        </span>
+
+                <span>
+          Meme Lab
+        </span>
+            </button>
+
+            <nav
+                className={styles.centerNav}
+            >
                 <button
                     type="button"
-                    className={styles.brand}
-                    onClick={goHome}
-                    aria-label="Go to Meme Lab home"
+                    onClick={handleHome}
                 >
-          <span className={styles.brandMark}>
-            M
-          </span>
-
-                    <span className={styles.brandText}>
-            Meme Lab
-          </span>
+                    Home
                 </button>
 
-                <nav
-                    className={styles.centerNav}
-                    aria-label="Main navigation"
+                <button
+                    type="button"
+                    onClick={handleCreate}
                 >
-                    <button
-                        type="button"
-                        onClick={goHome}
-                    >
-                        Home
-                    </button>
+                    Create
+                </button>
 
-                    <button
-                        type="button"
-                        onClick={goCreate}
-                    >
-                        Create
-                    </button>
+                <button
+                    type="button"
+                    onClick={
+                        handleExplore
+                    }
+                >
+                    Explore
+                </button>
+            </nav>
 
-                    <button
-                        type="button"
-                        onClick={goExplore}
-                    >
-                        Explore
-                    </button>
-                </nav>
-
-                <div className={styles.actions}>
-                    {loggedIn ? (
-                        <>
-                            {!onProfilePage && (
-                                <Link
-                                    href="/profile"
+            <div
+                className={styles.actions}
+            >
+                {currentUserId ? (
+                    <>
+                        {pathname !==
+                            "/profile" && (
+                                <button
+                                    type="button"
                                     className={
                                         styles.secondaryButton
                                     }
+                                    onClick={() =>
+                                        router.push(
+                                            "/profile"
+                                        )
+                                    }
                                 >
                                     Profile
-                                </Link>
+                                </button>
                             )}
 
-                            <button
-                                type="button"
-                                className={
-                                    styles.secondaryButton
-                                }
-                                onClick={() =>
-                                    void handleLogout()
-                                }
-                            >
-                                Log out
-                            </button>
-                        </>
-                    ) : (
-                        <>
-                            <Link
-                                href="/login"
-                                className={
-                                    styles.loginButton
-                                }
-                            >
-                                Log in
-                            </Link>
+                        <button
+                            type="button"
+                            className={
+                                styles.secondaryButton
+                            }
+                            onClick={() =>
+                                void handleLogout()
+                            }
+                        >
+                            Log out
+                        </button>
+                    </>
+                ) : (
+                    <>
+                        <button
+                            type="button"
+                            className={
+                                styles.secondaryButton
+                            }
+                            onClick={() =>
+                                router.push(
+                                    "/login"
+                                )
+                            }
+                        >
+                            Log in
+                        </button>
 
-                            <Link
-                                href="/signup"
-                                className={
-                                    styles.signupButton
-                                }
-                            >
-                                Sign up for free
-                            </Link>
-                        </>
-                    )}
-                </div>
+                        <button
+                            type="button"
+                            className={
+                                styles.signupButton
+                            }
+                            onClick={() =>
+                                router.push(
+                                    "/signup"
+                                )
+                            }
+                        >
+                            Sign up for free
+                        </button>
+                    </>
+                )}
             </div>
         </header>
     );

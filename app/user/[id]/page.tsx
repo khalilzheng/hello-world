@@ -1,32 +1,21 @@
-import { createClient } from "@/utils/supabase/server";
 import PublicProfileClient from "./PublicProfileClient";
 
-type Props = {
+type UserPageProps = {
     params: Promise<{
         id: string;
     }>;
 };
 
-export default async function PublicProfilePage({
-                                                    params,
-                                                }: Props) {
+export default async function UserPage({
+                                           params,
+                                       }: UserPageProps) {
     const { id } =
         await params;
 
-    const supabase =
-        await createClient();
-
-    const {
-        data: { user },
-    } =
-        await supabase.auth.getUser();
-
     return (
         <PublicProfileClient
-            profileUserId={id}
-            viewerUserId={
-                user?.id ??
-                null
+            profileUserId={
+                id
             }
         />
     );
