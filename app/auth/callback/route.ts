@@ -1,10 +1,11 @@
 import {
-    NextResponse,
-} from "next/server";
+    createServerClient,
+} from "@supabase/ssr";
 
 import {
-    createClient,
-} from "@/utils/supabase/server";
+    NextRequest,
+    NextResponse,
+} from "next/server";
 
 import {
     RESUME_MEME_COOKIE,
@@ -20,33 +21,19 @@ export const revalidate =
 
 /*
  * =========================================================
- * NO-CACHE REDIRECT
+ * TYPES
  * =========================================================
  */
 
-function redirectNoStore(
-    destination: URL
-) {
-    const response =
-        NextResponse.redirect(
-            destination
-        );
+type CookieToSet = {
+    name: string;
 
+    value: string;
 
-    response.headers.set(
-        "Cache-Control",
-        "no-store, no-cache, must-revalidate, max-age=0"
-    );
-
-
-    response.headers.set(
-        "Pragma",
-        "no-cache"
-    );
-
-
-    return response;
-}
+    options?: Parameters<
+        NextResponse["cookies"]["set"]
+    >[2];
+};
 
 
 /*
@@ -54,19 +41,13 @@ function redirectNoStore(
  * DEFAULT DISPLAY NAME
  * =========================================================
  *
- * Example:
+ * example:
  *
  * jialangzheng@gmail.com
  *
- * becomes:
+ * ->
  *
  * jialangzheng
- *
- * We deliberately do NOT force the Google
- * full name.
- *
- * Users can edit their Profile later if
- * they want to.
  */
 
 function getDefaultDisplayName(
@@ -75,18 +56,14 @@ function getDefaultDisplayName(
         | null
         | undefined
 ) {
-    if (
-        !email
-    ) {
+    if (!email) {
         return "Meme user";
     }
-
 
     const emailName =
         email
             .split("@")[0]
             ?.trim();
-
 
     return (
         emailName ||
@@ -97,57 +74,119 @@ function getDefaultDisplayName(
 
 /*
  * =========================================================
- * RESUME COOKIE
+ * DETERMINE PUBLIC APP ORIGIN
  * =========================================================
  *
- * This is the backup signal created when
- * a guest saves a meme before signup.
+ * On Vercel, request.url is not always the
+ * safest source for the public hostname.
+ *
+ * Prefer x-forwarded-host in production.
  */
 
-function hasResumeMemeCookie(
-    request: Request
-) {
-    const cookieHeader =
-        request.headers.get(
-            "cookie"
-        ) ?? "";
-
-
-    const cookieParts =
-        cookieHeader
-            .split(";")
-            .map(
-                (
-                    cookie
-                ) =>
-                    cookie.trim()
-            );
-
-
-    return cookieParts.some(
-        (
-            cookie
-        ) =>
-            cookie ===
-            `${RESUME_MEME_COOKIE}=1`
-    );
-}
-
-
-/*
- * =========================================================
- * GOOGLE OAUTH CALLBACK
- * =========================================================
- */
-
-export async function GET(
-    request: Request
+function getAppOrigin(
+    request: NextRequest
 ) {
     const requestUrl =
         new URL(
             request.url
         );
 
+    if (
+        process.env.NODE_ENV ===
+        "development"
+    ) {
+        return requestUrl.origin;
+    }
+
+    const forwardedHost =
+        request.headers.get(
+            "x-forwarded-host"
+        );
+
+    const forwardedProto =
+        request.headers.get(
+            "x-forwarded-proto"
+        ) ?? "https";
+
+    if (forwardedHost) {
+        return `${forwardedProto}://${forwardedHost}`;
+    }
+
+    return requestUrl.origin;
+}
+
+
+/*
+ * =========================================================
+ * CREATE REDIRECT AND EXPLICITLY ATTACH AUTH COOKIES
+ * =========================================================
+ */
+
+function createRedirect(
+    destination: string,
+
+    authCookies:
+    CookieToSet[]
+) {
+    const response =
+        NextResponse.redirect(
+            destination
+        );
+
+    /*
+     * THIS IS THE IMPORTANT PART.
+     *
+     * Explicitly attach every cookie produced
+     * by exchangeCodeForSession() to the actual
+     * redirect response that reaches Chrome.
+     */
+
+    authCookies.forEach(
+        ({
+             name,
+             value,
+             options,
+         }) => {
+            response.cookies.set(
+                name,
+                value,
+                options
+            );
+        }
+    );
+
+    response.headers.set(
+        "Cache-Control",
+        "no-store, no-cache, must-revalidate, max-age=0"
+    );
+
+    response.headers.set(
+        "Pragma",
+        "no-cache"
+    );
+
+    return response;
+}
+
+
+/*
+ * =========================================================
+ * CALLBACK
+ * =========================================================
+ */
+
+export async function GET(
+    request: NextRequest
+) {
+    const requestUrl =
+        new URL(
+            request.url
+        );
+
+    const appOrigin =
+        getAppOrigin(
+            request
+        );
 
     const code =
         requestUrl.searchParams.get(
@@ -157,37 +196,120 @@ export async function GET(
 
     /*
      * =====================================================
-     * MISSING CODE
+     * NO CODE
      * =====================================================
      */
 
-    if (
-        !code
-    ) {
-        return redirectNoStore(
-            new URL(
-                "/login?error=missing_code",
-                requestUrl.origin
-            )
+    if (!code) {
+        return NextResponse.redirect(
+            `${appOrigin}/login?error=missing_code`
         );
     }
 
 
+    /*
+     * =====================================================
+     * COLLECT SESSION COOKIES
+     * =====================================================
+     *
+     * Instead of relying on Next's cookies()
+     * abstraction, collect exactly what
+     * Supabase wants to set.
+     */
+
+    const authCookies:
+        CookieToSet[] =
+        [];
+
+
     const supabase =
-        await createClient();
+        createServerClient(
+            process.env
+                .NEXT_PUBLIC_SUPABASE_URL!,
+
+            process.env
+                .NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
+
+            {
+                cookies: {
+                    getAll() {
+                        return request.cookies.getAll();
+                    },
+
+                    setAll(
+                        cookiesToSet
+                    ) {
+                        cookiesToSet.forEach(
+                            ({
+                                 name,
+                                 value,
+                                 options,
+                             }) => {
+                                /*
+                                 * Keep request cookies
+                                 * synchronized inside this
+                                 * callback request.
+                                 */
+
+                                request.cookies.set(
+                                    name,
+                                    value
+                                );
+
+                                /*
+                                 * Save everything so we can
+                                 * explicitly attach it to the
+                                 * final redirect response.
+                                 */
+
+                                const existingIndex =
+                                    authCookies.findIndex(
+                                        (
+                                            cookie
+                                        ) =>
+                                            cookie.name ===
+                                            name
+                                    );
+
+                                const nextCookie:
+                                    CookieToSet =
+                                    {
+                                        name,
+                                        value,
+                                        options,
+                                    };
+
+                                if (
+                                    existingIndex >=
+                                    0
+                                ) {
+                                    authCookies[
+                                        existingIndex
+                                        ] =
+                                        nextCookie;
+                                } else {
+                                    authCookies.push(
+                                        nextCookie
+                                    );
+                                }
+                            }
+                        );
+                    },
+                },
+            }
+        );
 
 
     /*
      * =====================================================
-     * EXCHANGE GOOGLE CODE FOR SUPABASE SESSION
+     * EXCHANGE GOOGLE OAUTH CODE
      * =====================================================
-     *
-     * This is the important step that creates
-     * the authenticated Supabase session and
-     * writes auth cookies.
      */
 
     const {
+        data:
+            exchangeData,
+
         error:
             exchangeError,
     } =
@@ -198,26 +320,25 @@ export async function GET(
 
 
     if (
-        exchangeError
+        exchangeError ||
+        !exchangeData.session
     ) {
         console.error(
             "OAuth exchange failed:",
             exchangeError
         );
 
+        return createRedirect(
+            `${appOrigin}/login?error=oauth`,
 
-        return redirectNoStore(
-            new URL(
-                "/login?error=oauth",
-                requestUrl.origin
-            )
+            authCookies
         );
     }
 
 
     /*
      * =====================================================
-     * VERIFY USER AFTER SESSION EXCHANGE
+     * VERIFY USER
      * =====================================================
      */
 
@@ -237,23 +358,21 @@ export async function GET(
         !user
     ) {
         console.error(
-            "Session exists but user could not be verified:",
+            "OAuth session created but user verification failed:",
             userError
         );
 
+        return createRedirect(
+            `${appOrigin}/login?error=session`,
 
-        return redirectNoStore(
-            new URL(
-                "/login?error=session",
-                requestUrl.origin
-            )
+            authCookies
         );
     }
 
 
     /*
      * =====================================================
-     * DEFAULT USER NAME
+     * PROFILE DEFAULT NAME
      * =====================================================
      */
 
@@ -262,17 +381,6 @@ export async function GET(
             user.email
         );
 
-
-    /*
-     * =====================================================
-     * CHECK EXISTING PROFILE
-     * =====================================================
-     *
-     * We only fill a default name when needed.
-     *
-     * If the user previously customized their
-     * profile, we leave it untouched.
-     */
 
     const {
         data:
@@ -339,11 +447,8 @@ export async function GET(
         /*
          * 23505 = duplicate key.
          *
-         * This can happen if you already have
-         * a database trigger creating profiles.
-         *
-         * In that case the login itself should
-         * still continue normally.
+         * Ignore because a DB trigger may already
+         * have created the profile.
          */
 
         if (
@@ -356,41 +461,18 @@ export async function GET(
                 insertProfileError
             );
         }
-    }
+    } else {
+        /*
+         * =================================================
+         * EXISTING PROFILE WITH NO NAME
+         * =================================================
+         */
 
-
-    /*
-     * =====================================================
-     * PROFILE EXISTS BUT NAME IS EMPTY
-     * =====================================================
-     *
-     * Example:
-     *
-     * first_name = ""
-     * last_name  = ""
-     *
-     * becomes:
-     *
-     * first_name = email-name
-     *
-     * But:
-     *
-     * John / ""
-     *
-     * stays John.
-     *
-     * "" / Smith
-     *
-     * stays Smith.
-     */
-
-    else {
         const firstName =
             existingProfile
                 .first_name
                 ?.trim() ??
             "";
-
 
         const lastName =
             existingProfile
@@ -398,6 +480,11 @@ export async function GET(
                 ?.trim() ??
             "";
 
+
+        /*
+         * Don't overwrite anything the user
+         * manually entered.
+         */
 
         if (
             !firstName &&
@@ -425,7 +512,7 @@ export async function GET(
                 updateProfileError
             ) {
                 console.warn(
-                    "Could not add default profile name:",
+                    "Could not add default display name:",
                     updateProfileError
                 );
             }
@@ -435,60 +522,50 @@ export async function GET(
 
     /*
      * =====================================================
-     * DETERMINE WHETHER THIS USER CAME FROM
-     * THE GUEST MEME SIGNUP FLOW
+     * SHOULD WE RESTORE A GUEST MEME?
      * =====================================================
      *
-     * We support TWO signals:
+     * Two independent signals:
      *
-     * 1. /auth/callback?resume=meme
+     * 1. callback URL:
      *
-     * 2. meme_lab_resume=1 cookie
+     *    ?resume=meme
      *
-     * Either one is enough.
+     * 2. browser cookie:
+     *
+     *    meme_lab_resume=1
      */
 
-    const shouldResumeMeme =
+    const resumeFromQuery =
         requestUrl.searchParams.get(
             "resume"
-        ) ===
-        "meme" ||
-        hasResumeMemeCookie(
-            request
-        );
+        ) === "meme";
+
+
+    const resumeFromCookie =
+        request.cookies.get(
+            RESUME_MEME_COOKIE
+        )?.value === "1";
+
+
+    const shouldResumeMeme =
+        resumeFromQuery ||
+        resumeFromCookie;
 
 
     /*
      * =====================================================
-     * GUEST MEME SIGNUP
+     * GUEST MEME FLOW
      * =====================================================
-     *
-     * Guest:
-     *
-     * Try Meme Lab
-     *      ↓
-     * generate meme
-     *      ↓
-     * Save this meme — sign up free
-     *      ↓
-     * Google
-     *      ↓
-     * callback
-     *      ↓
-     * dashboard?resume=meme
-     *
-     * Dashboard then reads the actual meme
-     * from localStorage and reopens it.
      */
 
     if (
         shouldResumeMeme
     ) {
-        return redirectNoStore(
-            new URL(
-                "/dashboard?resume=meme",
-                requestUrl.origin
-            )
+        return createRedirect(
+            `${appOrigin}/dashboard?resume=meme`,
+
+            authCookies
         );
     }
 
@@ -498,15 +575,12 @@ export async function GET(
      * NORMAL LOGIN / SIGNUP
      * =====================================================
      *
-     * No forced Profile onboarding.
-     *
-     * User immediately enters Meme Lab.
+     * No forced profile page.
      */
 
-    return redirectNoStore(
-        new URL(
-            "/dashboard?auth=1",
-            requestUrl.origin
-        )
+    return createRedirect(
+        `${appOrigin}/dashboard?auth=1`,
+
+        authCookies
     );
 }
