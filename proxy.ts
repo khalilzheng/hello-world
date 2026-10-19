@@ -32,11 +32,13 @@ export async function proxy(
                     },
 
                     setAll(
-                        cookiesToSet
+                        cookiesToSet,
+                        headers
                     ) {
                         /*
-                         * Update the cookies on the
-                         * incoming request first.
+                         * Keep the incoming request
+                         * synchronized with refreshed
+                         * Supabase cookies.
                          */
                         cookiesToSet.forEach(
                             ({
@@ -52,20 +54,18 @@ export async function proxy(
 
 
                         /*
-                         * Create a fresh response that
-                         * contains the updated request.
+                         * Re-create the response using
+                         * the updated request.
                          */
                         supabaseResponse =
-                            NextResponse.next(
-                                {
-                                    request,
-                                }
-                            );
+                            NextResponse.next({
+                                request,
+                            });
 
 
                         /*
-                         * Send the refreshed Supabase
-                         * cookies back to the browser.
+                         * Send refreshed auth cookies
+                         * back to the browser.
                          */
                         cookiesToSet.forEach(
                             ({
@@ -80,6 +80,27 @@ export async function proxy(
                                 );
                             }
                         );
+
+
+                        /*
+                         * @supabase/ssr 0.12.x may also
+                         * provide important cache headers.
+                         *
+                         * Preserve them.
+                         */
+                        Object.entries(
+                            headers ?? {}
+                        ).forEach(
+                            ([
+                                 key,
+                                 value,
+                             ]) => {
+                                supabaseResponse.headers.set(
+                                    key,
+                                    value
+                                );
+                            }
+                        );
                     },
                 },
             }
@@ -89,21 +110,23 @@ export async function proxy(
     /*
      * IMPORTANT:
      *
-     * This verifies / refreshes the current
-     * Supabase user session.
+     * Call getUser immediately after creating
+     * the Supabase client.
      *
-     * Do not remove this.
+     * This verifies / refreshes the session.
      *
-     * We deliberately DO NOT redirect logged-out
-     * visitors, because Meme Lab supports:
-     *
-     * - public Explore
-     * - guest browsing
-     * - Try Meme Lab instantly
+     * Meme Lab intentionally allows logged-out
+     * browsing, so we DO NOT redirect guests here.
      */
     await supabase.auth.getUser();
 
 
+    /*
+     * IMPORTANT:
+     *
+     * Return THIS exact response because it
+     * contains any refreshed Supabase cookies.
+     */
     return supabaseResponse;
 }
 
@@ -111,8 +134,8 @@ export async function proxy(
 export const config = {
     matcher: [
         /*
-         * Run on normal application pages,
-         * but skip static assets.
+         * Run for app routes while skipping
+         * static/image assets.
          */
         "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
     ],

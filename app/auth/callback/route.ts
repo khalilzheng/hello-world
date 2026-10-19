@@ -1,11 +1,11 @@
 import {
-    createServerClient,
-} from "@supabase/ssr";
-
-import {
     NextRequest,
     NextResponse,
 } from "next/server";
+
+import {
+    createClient,
+} from "@/utils/supabase/server";
 
 import {
     RESUME_MEME_COOKIE,
@@ -21,33 +21,14 @@ export const revalidate =
 
 /*
  * =========================================================
- * TYPES
- * =========================================================
- */
-
-type CookieToSet = {
-    name: string;
-
-    value: string;
-
-    options?: Parameters<
-        NextResponse["cookies"]["set"]
-    >[2];
-};
-
-
-/*
- * =========================================================
- * DEFAULT DISPLAY NAME
+ * DISPLAY NAME
  * =========================================================
  *
- * example:
- *
- * jialangzheng@gmail.com
+ * example@gmail.com
  *
  * ->
  *
- * jialangzheng
+ * example
  */
 
 function getDefaultDisplayName(
@@ -60,10 +41,12 @@ function getDefaultDisplayName(
         return "Meme user";
     }
 
+
     const emailName =
         email
             .split("@")[0]
             ?.trim();
+
 
     return (
         emailName ||
@@ -74,23 +57,23 @@ function getDefaultDisplayName(
 
 /*
  * =========================================================
- * DETERMINE PUBLIC APP ORIGIN
+ * PUBLIC APP ORIGIN
  * =========================================================
- *
- * On Vercel, request.url is not always the
- * safest source for the public hostname.
- *
- * Prefer x-forwarded-host in production.
  */
 
 function getAppOrigin(
-    request: NextRequest
+    request:
+    NextRequest
 ) {
     const requestUrl =
         new URL(
             request.url
         );
 
+
+    /*
+     * Local development.
+     */
     if (
         process.env.NODE_ENV ===
         "development"
@@ -98,19 +81,31 @@ function getAppOrigin(
         return requestUrl.origin;
     }
 
+
+    /*
+     * Vercel / reverse proxy.
+     */
     const forwardedHost =
         request.headers.get(
             "x-forwarded-host"
         );
 
+
     const forwardedProto =
         request.headers.get(
             "x-forwarded-proto"
-        ) ?? "https";
+        ) ??
+        "https";
 
-    if (forwardedHost) {
-        return `${forwardedProto}://${forwardedHost}`;
+
+    if (
+        forwardedHost
+    ) {
+        return (
+            `${forwardedProto}://${forwardedHost}`
+        );
     }
+
 
     return requestUrl.origin;
 }
@@ -118,52 +113,31 @@ function getAppOrigin(
 
 /*
  * =========================================================
- * CREATE REDIRECT AND EXPLICITLY ATTACH AUTH COOKIES
+ * REDIRECT
  * =========================================================
  */
 
-function createRedirect(
-    destination: string,
-
-    authCookies:
-    CookieToSet[]
+function redirectNoStore(
+    destination:
+    string
 ) {
     const response =
         NextResponse.redirect(
             destination
         );
 
-    /*
-     * THIS IS THE IMPORTANT PART.
-     *
-     * Explicitly attach every cookie produced
-     * by exchangeCodeForSession() to the actual
-     * redirect response that reaches Chrome.
-     */
-
-    authCookies.forEach(
-        ({
-             name,
-             value,
-             options,
-         }) => {
-            response.cookies.set(
-                name,
-                value,
-                options
-            );
-        }
-    );
 
     response.headers.set(
         "Cache-Control",
-        "no-store, no-cache, must-revalidate, max-age=0"
+        "private, no-store, no-cache, must-revalidate, max-age=0"
     );
+
 
     response.headers.set(
         "Pragma",
         "no-cache"
     );
+
 
     return response;
 }
@@ -171,22 +145,25 @@ function createRedirect(
 
 /*
  * =========================================================
- * CALLBACK
+ * OAUTH CALLBACK
  * =========================================================
  */
 
 export async function GET(
-    request: NextRequest
+    request:
+    NextRequest
 ) {
     const requestUrl =
         new URL(
             request.url
         );
 
+
     const appOrigin =
         getAppOrigin(
             request
         );
+
 
     const code =
         requestUrl.searchParams.get(
@@ -196,114 +173,30 @@ export async function GET(
 
     /*
      * =====================================================
-     * NO CODE
+     * MISSING AUTH CODE
      * =====================================================
      */
 
-    if (!code) {
-        return NextResponse.redirect(
+    if (
+        !code
+    ) {
+        return redirectNoStore(
             `${appOrigin}/login?error=missing_code`
         );
     }
 
 
+    const supabase =
+        await createClient();
+
+
     /*
      * =====================================================
-     * COLLECT SESSION COOKIES
+     * EXCHANGE PKCE CODE
      * =====================================================
      *
-     * Instead of relying on Next's cookies()
-     * abstraction, collect exactly what
-     * Supabase wants to set.
-     */
-
-    const authCookies:
-        CookieToSet[] =
-        [];
-
-
-    const supabase =
-        createServerClient(
-            process.env
-                .NEXT_PUBLIC_SUPABASE_URL!,
-
-            process.env
-                .NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
-
-            {
-                cookies: {
-                    getAll() {
-                        return request.cookies.getAll();
-                    },
-
-                    setAll(
-                        cookiesToSet
-                    ) {
-                        cookiesToSet.forEach(
-                            ({
-                                 name,
-                                 value,
-                                 options,
-                             }) => {
-                                /*
-                                 * Keep request cookies
-                                 * synchronized inside this
-                                 * callback request.
-                                 */
-
-                                request.cookies.set(
-                                    name,
-                                    value
-                                );
-
-                                /*
-                                 * Save everything so we can
-                                 * explicitly attach it to the
-                                 * final redirect response.
-                                 */
-
-                                const existingIndex =
-                                    authCookies.findIndex(
-                                        (
-                                            cookie
-                                        ) =>
-                                            cookie.name ===
-                                            name
-                                    );
-
-                                const nextCookie:
-                                    CookieToSet =
-                                    {
-                                        name,
-                                        value,
-                                        options,
-                                    };
-
-                                if (
-                                    existingIndex >=
-                                    0
-                                ) {
-                                    authCookies[
-                                        existingIndex
-                                        ] =
-                                        nextCookie;
-                                } else {
-                                    authCookies.push(
-                                        nextCookie
-                                    );
-                                }
-                            }
-                        );
-                    },
-                },
-            }
-        );
-
-
-    /*
-     * =====================================================
-     * EXCHANGE GOOGLE OAUTH CODE
-     * =====================================================
+     * This creates the real authenticated
+     * Supabase session.
      */
 
     const {
@@ -320,59 +213,53 @@ export async function GET(
 
 
     if (
-        exchangeError ||
-        !exchangeData.session
+        exchangeError
     ) {
         console.error(
             "OAuth exchange failed:",
             exchangeError
         );
 
-        return createRedirect(
-            `${appOrigin}/login?error=oauth`,
 
-            authCookies
+        return redirectNoStore(
+            `${appOrigin}/login?error=oauth`
         );
     }
 
 
     /*
-     * =====================================================
-     * VERIFY USER
-     * =====================================================
+     * exchangeCodeForSession already returns
+     * the authenticated user.
+     *
+     * Do NOT immediately perform another
+     * auth.getUser() just to rediscover the
+     * same user.
      */
 
-    const {
-        data: {
-            user,
-        },
-
-        error:
-            userError,
-    } =
-        await supabase.auth.getUser();
+    const user =
+        exchangeData.user ??
+        exchangeData.session
+            ?.user ??
+        null;
 
 
     if (
-        userError ||
         !user
     ) {
         console.error(
-            "OAuth session created but user verification failed:",
-            userError
+            "OAuth exchange succeeded but no user was returned."
         );
 
-        return createRedirect(
-            `${appOrigin}/login?error=session`,
 
-            authCookies
+        return redirectNoStore(
+            `${appOrigin}/login?error=session`
         );
     }
 
 
     /*
      * =====================================================
-     * PROFILE DEFAULT NAME
+     * DEFAULT PROFILE NAME
      * =====================================================
      */
 
@@ -381,6 +268,12 @@ export async function GET(
             user.email
         );
 
+
+    /*
+     * =====================================================
+     * CHECK PROFILE
+     * =====================================================
+     */
 
     const {
         data:
@@ -417,7 +310,7 @@ export async function GET(
 
     /*
      * =====================================================
-     * CREATE PROFILE IF MISSING
+     * CREATE PROFILE
      * =====================================================
      */
 
@@ -445,12 +338,11 @@ export async function GET(
 
 
         /*
-         * 23505 = duplicate key.
+         * 23505 means another trigger/process
+         * already created it.
          *
-         * Ignore because a DB trigger may already
-         * have created the profile.
+         * Login should continue.
          */
-
         if (
             insertProfileError &&
             insertProfileError.code !==
@@ -464,7 +356,7 @@ export async function GET(
     } else {
         /*
          * =================================================
-         * EXISTING PROFILE WITH NO NAME
+         * PROFILE EXISTS BUT NAME IS EMPTY
          * =================================================
          */
 
@@ -474,6 +366,7 @@ export async function GET(
                 ?.trim() ??
             "";
 
+
         const lastName =
             existingProfile
                 .last_name
@@ -482,10 +375,9 @@ export async function GET(
 
 
         /*
-         * Don't overwrite anything the user
-         * manually entered.
+         * Never overwrite a name the user
+         * already customized.
          */
-
         if (
             !firstName &&
             !lastName
@@ -512,7 +404,7 @@ export async function GET(
                 updateProfileError
             ) {
                 console.warn(
-                    "Could not add default display name:",
+                    "Could not add default profile name:",
                     updateProfileError
                 );
             }
@@ -522,50 +414,37 @@ export async function GET(
 
     /*
      * =====================================================
-     * SHOULD WE RESTORE A GUEST MEME?
+     * GUEST MEME RESUME
      * =====================================================
      *
-     * Two independent signals:
+     * The meme itself is stored in localStorage.
      *
-     * 1. callback URL:
+     * This cookie simply tells the callback:
      *
-     *    ?resume=meme
+     * "after authentication, reopen it."
      *
-     * 2. browser cookie:
-     *
-     *    meme_lab_resume=1
+     * OAuth itself no longer needs a special
+     * callback URL.
      */
 
-    const resumeFromQuery =
-        requestUrl.searchParams.get(
-            "resume"
-        ) === "meme";
-
-
-    const resumeFromCookie =
+    const shouldResumeMeme =
         request.cookies.get(
             RESUME_MEME_COOKIE
-        )?.value === "1";
-
-
-    const shouldResumeMeme =
-        resumeFromQuery ||
-        resumeFromCookie;
+        )?.value ===
+        "1";
 
 
     /*
      * =====================================================
-     * GUEST MEME FLOW
+     * GUEST MEME SIGNUP
      * =====================================================
      */
 
     if (
         shouldResumeMeme
     ) {
-        return createRedirect(
-            `${appOrigin}/dashboard?resume=meme`,
-
-            authCookies
+        return redirectNoStore(
+            `${appOrigin}/dashboard?resume=meme`
         );
     }
 
@@ -574,13 +453,9 @@ export async function GET(
      * =====================================================
      * NORMAL LOGIN / SIGNUP
      * =====================================================
-     *
-     * No forced profile page.
      */
 
-    return createRedirect(
-        `${appOrigin}/dashboard?auth=1`,
-
-        authCookies
+    return redirectNoStore(
+        `${appOrigin}/dashboard?auth=1`
     );
 }

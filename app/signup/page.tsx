@@ -14,10 +14,6 @@ import {
     createClient,
 } from "@/utils/supabase/client";
 
-import {
-    PENDING_MEME_KEY,
-} from "@/app/lib/pendingMeme";
-
 import styles from "../AuthPage.module.css";
 
 
@@ -25,18 +21,22 @@ export default function SignupPage() {
     const router =
         useRouter();
 
+
     const supabase =
         useMemo(
             () =>
                 createClient(),
+
             []
         );
+
 
     const [
         loading,
         setLoading,
     ] =
         useState(false);
+
 
     const [
         error,
@@ -47,7 +47,7 @@ export default function SignupPage() {
 
     /*
      * ======================================================
-     * EXISTING SESSION
+     * ALREADY LOGGED IN
      * ======================================================
      */
 
@@ -95,6 +95,15 @@ export default function SignupPage() {
      * ======================================================
      * GOOGLE SIGNUP
      * ======================================================
+     *
+     * IMPORTANT:
+     *
+     * OAuth ALWAYS goes through exactly:
+     *
+     * /auth/callback
+     *
+     * We DO NOT put ?resume=meme into
+     * Supabase redirectTo anymore.
      */
 
     async function signUpWithGoogle() {
@@ -102,63 +111,31 @@ export default function SignupPage() {
             true
         );
 
+
         setError("");
 
 
-        /*
-         * If this signup began from a guest
-         * generated meme, explicitly preserve
-         * that intent in the callback URL.
-         *
-         * localStorage itself stays in the browser.
-         * We only pass the "resume" instruction.
-         */
-
-        const hasPendingMeme =
-            Boolean(
-                window.localStorage.getItem(
-                    PENDING_MEME_KEY
-                )
-            );
-
-
-        const callbackUrl =
-            new URL(
-                "/auth/callback",
-                window.location.origin
-            );
-
-
-        if (
-            hasPendingMeme
-        ) {
-            callbackUrl.searchParams.set(
-                "resume",
-                "meme"
-            );
-        }
+        const redirectTo =
+            `${window.location.origin}/auth/callback`;
 
 
         const {
             error:
                 oauthError,
         } =
-            await supabase.auth.signInWithOAuth(
-                {
-                    provider:
-                        "google",
+            await supabase.auth.signInWithOAuth({
+                provider:
+                    "google",
 
-                    options: {
-                        redirectTo:
-                            callbackUrl.toString(),
+                options: {
+                    redirectTo,
 
-                        queryParams: {
-                            prompt:
-                                "select_account",
-                        },
+                    queryParams: {
+                        prompt:
+                            "select_account",
                     },
-                }
-            );
+                },
+            });
 
 
         if (
@@ -187,6 +164,7 @@ export default function SignupPage() {
                 }
             />
 
+
             <button
                 type="button"
                 className={
@@ -209,6 +187,7 @@ export default function SignupPage() {
                 Meme Lab
             </button>
 
+
             <section
                 className={
                     styles.authCard
@@ -222,9 +201,11 @@ export default function SignupPage() {
                     JOIN MEME LAB
                 </p>
 
+
                 <h1>
                     Create your account.
                 </h1>
+
 
                 <p
                     className={
@@ -235,6 +216,7 @@ export default function SignupPage() {
                     vote, and explore what
                     everyone is making.
                 </p>
+
 
                 <button
                     type="button"
@@ -256,10 +238,12 @@ export default function SignupPage() {
                         G
                     </span>
 
+
                     {loading
                         ? "Opening Google..."
                         : "Sign up with Google"}
                 </button>
+
 
                 {error && (
                     <p
@@ -270,6 +254,7 @@ export default function SignupPage() {
                         {error}
                     </p>
                 )}
+
 
                 <div
                     className={
@@ -285,6 +270,7 @@ export default function SignupPage() {
                     <span />
                 </div>
 
+
                 <button
                     type="button"
                     className={
@@ -298,6 +284,7 @@ export default function SignupPage() {
                 >
                     Log in
                 </button>
+
 
                 <p
                     className={

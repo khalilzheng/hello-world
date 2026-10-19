@@ -26,7 +26,8 @@ export async function createClient() {
                 },
 
                 setAll(
-                    cookiesToSet
+                    cookiesToSet,
+                    _headers
                 ) {
                     try {
                         cookiesToSet.forEach(
@@ -44,11 +45,10 @@ export async function createClient() {
                         );
                     } catch {
                         /*
-                         * A Server Component cannot
-                         * always write cookies.
+                         * Server Components cannot always
+                         * write cookies directly.
                          *
-                         * This is okay because proxy.ts
-                         * now handles session refreshing.
+                         * proxy.ts handles session refresh.
                          */
                     }
                 },
