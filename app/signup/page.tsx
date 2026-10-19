@@ -14,6 +14,10 @@ import {
     createClient,
 } from "@/utils/supabase/client";
 
+import {
+    PENDING_MEME_KEY,
+} from "@/app/lib/pendingMeme";
+
 import styles from "../AuthPage.module.css";
 
 
@@ -45,17 +49,12 @@ export default function SignupPage() {
      * ======================================================
      * EXISTING SESSION
      * ======================================================
-     *
-     * If someone who is already logged in
-     * accidentally opens /signup, just send
-     * them back to Meme Lab.
-     *
-     * We DO NOT send them to Profile.
      */
 
     useEffect(() => {
         let mounted =
             true;
+
 
         async function checkExistingSession() {
             const {
@@ -64,6 +63,7 @@ export default function SignupPage() {
                 },
             } =
                 await supabase.auth.getUser();
+
 
             if (
                 mounted &&
@@ -77,7 +77,9 @@ export default function SignupPage() {
             }
         }
 
+
         void checkExistingSession();
+
 
         return () => {
             mounted =
@@ -102,8 +104,40 @@ export default function SignupPage() {
 
         setError("");
 
-        const redirectTo =
-            `${window.location.origin}/auth/callback`;
+
+        /*
+         * If this signup began from a guest
+         * generated meme, explicitly preserve
+         * that intent in the callback URL.
+         *
+         * localStorage itself stays in the browser.
+         * We only pass the "resume" instruction.
+         */
+
+        const hasPendingMeme =
+            Boolean(
+                window.localStorage.getItem(
+                    PENDING_MEME_KEY
+                )
+            );
+
+
+        const callbackUrl =
+            new URL(
+                "/auth/callback",
+                window.location.origin
+            );
+
+
+        if (
+            hasPendingMeme
+        ) {
+            callbackUrl.searchParams.set(
+                "resume",
+                "meme"
+            );
+        }
+
 
         const {
             error:
@@ -115,16 +149,9 @@ export default function SignupPage() {
                         "google",
 
                     options: {
-                        redirectTo,
+                        redirectTo:
+                            callbackUrl.toString(),
 
-                        /*
-                         * Always show the Google
-                         * account chooser.
-                         *
-                         * This is useful for testing
-                         * and also prevents accidentally
-                         * reusing another person's account.
-                         */
                         queryParams: {
                             prompt:
                                 "select_account",
@@ -132,6 +159,7 @@ export default function SignupPage() {
                     },
                 }
             );
+
 
         if (
             oauthError
@@ -271,14 +299,6 @@ export default function SignupPage() {
                     Log in
                 </button>
 
-                {/*
-                 * IMPORTANT:
-                 *
-                 * We no longer tell people that
-                 * they must complete their profile.
-                 *
-                 * Profile editing is optional.
-                 */}
                 <p
                     className={
                         styles.footerText

@@ -32,15 +32,18 @@ function redirectNoStore(
             destination
         );
 
+
     response.headers.set(
         "Cache-Control",
         "no-store, no-cache, must-revalidate, max-age=0"
     );
 
+
     response.headers.set(
         "Pragma",
         "no-cache"
     );
+
 
     return response;
 }
@@ -51,8 +54,6 @@ function redirectNoStore(
  * DEFAULT DISPLAY NAME
  * =========================================================
  *
- * We intentionally use the part BEFORE @.
- *
  * Example:
  *
  * jialangzheng@gmail.com
@@ -61,15 +62,18 @@ function redirectNoStore(
  *
  * jialangzheng
  *
- * We do NOT force Google full name.
- * The user can change their profile later.
+ * We deliberately do NOT force the Google
+ * full name.
+ *
+ * Users can edit their Profile later if
+ * they want to.
  */
 
 function getDefaultDisplayName(
     email:
         | string
-        | undefined
         | null
+        | undefined
 ) {
     if (
         !email
@@ -77,10 +81,12 @@ function getDefaultDisplayName(
         return "Meme user";
     }
 
+
     const emailName =
         email
             .split("@")[0]
             ?.trim();
+
 
     return (
         emailName ||
@@ -91,8 +97,11 @@ function getDefaultDisplayName(
 
 /*
  * =========================================================
- * COOKIE HELPER
+ * RESUME COOKIE
  * =========================================================
+ *
+ * This is the backup signal created when
+ * a guest saves a meme before signup.
  */
 
 function hasResumeMemeCookie(
@@ -103,16 +112,22 @@ function hasResumeMemeCookie(
             "cookie"
         ) ?? "";
 
-    const cookies =
+
+    const cookieParts =
         cookieHeader
             .split(";")
             .map(
-                (cookie) =>
+                (
+                    cookie
+                ) =>
                     cookie.trim()
             );
 
-    return cookies.some(
-        (cookie) =>
+
+    return cookieParts.some(
+        (
+            cookie
+        ) =>
             cookie ===
             `${RESUME_MEME_COOKIE}=1`
     );
@@ -121,7 +136,7 @@ function hasResumeMemeCookie(
 
 /*
  * =========================================================
- * OAUTH CALLBACK
+ * GOOGLE OAUTH CALLBACK
  * =========================================================
  */
 
@@ -133,6 +148,7 @@ export async function GET(
             request.url
         );
 
+
     const code =
         requestUrl.searchParams.get(
             "code"
@@ -141,7 +157,7 @@ export async function GET(
 
     /*
      * =====================================================
-     * VALIDATE OAUTH CODE
+     * MISSING CODE
      * =====================================================
      */
 
@@ -163,11 +179,12 @@ export async function GET(
 
     /*
      * =====================================================
-     * EXCHANGE CODE FOR SESSION
+     * EXCHANGE GOOGLE CODE FOR SUPABASE SESSION
      * =====================================================
      *
-     * This writes the user's authenticated
-     * Supabase session cookies.
+     * This is the important step that creates
+     * the authenticated Supabase session and
+     * writes auth cookies.
      */
 
     const {
@@ -188,6 +205,7 @@ export async function GET(
             exchangeError
         );
 
+
         return redirectNoStore(
             new URL(
                 "/login?error=oauth",
@@ -199,7 +217,7 @@ export async function GET(
 
     /*
      * =====================================================
-     * VERIFY USER
+     * VERIFY USER AFTER SESSION EXCHANGE
      * =====================================================
      */
 
@@ -223,6 +241,7 @@ export async function GET(
             userError
         );
 
+
         return redirectNoStore(
             new URL(
                 "/login?error=session",
@@ -234,12 +253,8 @@ export async function GET(
 
     /*
      * =====================================================
-     * DEFAULT PROFILE NAME
+     * DEFAULT USER NAME
      * =====================================================
-     *
-     * Every authenticated user should have
-     * a useful public display name even if
-     * they never touch Profile settings.
      */
 
     const defaultDisplayName =
@@ -249,12 +264,14 @@ export async function GET(
 
 
     /*
-     * First see whether the profile already exists.
+     * =====================================================
+     * CHECK EXISTING PROFILE
+     * =====================================================
      *
-     * IMPORTANT:
+     * We only fill a default name when needed.
      *
-     * We do NOT overwrite names that the user
-     * manually entered before.
+     * If the user previously customized their
+     * profile, we leave it untouched.
      */
 
     const {
@@ -292,12 +309,8 @@ export async function GET(
 
     /*
      * =====================================================
-     * PROFILE DOES NOT EXIST
+     * CREATE PROFILE IF MISSING
      * =====================================================
-     *
-     * Create a minimal profile automatically.
-     *
-     * The user does NOT need to edit it.
      */
 
     if (
@@ -318,23 +331,21 @@ export async function GET(
                     first_name:
                     defaultDisplayName,
 
-                    /*
-                     * Last name is deliberately optional.
-                     *
-                     * We don't invent one.
-                     */
                     last_name:
                         "",
                 });
 
 
         /*
-         * A profile trigger could theoretically
-         * create the row at nearly the same time.
+         * 23505 = duplicate key.
          *
-         * Don't destroy the login flow because of
-         * a harmless duplicate-profile race.
+         * This can happen if you already have
+         * a database trigger creating profiles.
+         *
+         * In that case the login itself should
+         * still continue normally.
          */
+
         if (
             insertProfileError &&
             insertProfileError.code !==
@@ -350,7 +361,7 @@ export async function GET(
 
     /*
      * =====================================================
-     * PROFILE EXISTS BUT HAS NO NAME
+     * PROFILE EXISTS BUT NAME IS EMPTY
      * =====================================================
      *
      * Example:
@@ -358,10 +369,19 @@ export async function GET(
      * first_name = ""
      * last_name  = ""
      *
-     * Fix only the first name.
+     * becomes:
      *
-     * If the user already entered a real name,
-     * leave it completely untouched.
+     * first_name = email-name
+     *
+     * But:
+     *
+     * John / ""
+     *
+     * stays John.
+     *
+     * "" / Smith
+     *
+     * stays Smith.
      */
 
     else {
@@ -371,26 +391,13 @@ export async function GET(
                 ?.trim() ??
             "";
 
+
         const lastName =
             existingProfile
                 .last_name
                 ?.trim() ??
             "";
 
-
-        /*
-         * Only fill a default if BOTH are blank.
-         *
-         * This means:
-         *
-         * John / ""
-         *
-         * stays John.
-         *
-         * "" / Smith
-         *
-         * stays Smith.
-         */
 
         if (
             !firstName &&
@@ -428,25 +435,54 @@ export async function GET(
 
     /*
      * =====================================================
+     * DETERMINE WHETHER THIS USER CAME FROM
+     * THE GUEST MEME SIGNUP FLOW
+     * =====================================================
+     *
+     * We support TWO signals:
+     *
+     * 1. /auth/callback?resume=meme
+     *
+     * 2. meme_lab_resume=1 cookie
+     *
+     * Either one is enough.
+     */
+
+    const shouldResumeMeme =
+        requestUrl.searchParams.get(
+            "resume"
+        ) ===
+        "meme" ||
+        hasResumeMemeCookie(
+            request
+        );
+
+
+    /*
+     * =====================================================
      * GUEST MEME SIGNUP
      * =====================================================
      *
-     * If this account was created from:
+     * Guest:
      *
      * Try Meme Lab
      *      ↓
+     * generate meme
+     *      ↓
      * Save this meme — sign up free
+     *      ↓
+     * Google
+     *      ↓
+     * callback
+     *      ↓
+     * dashboard?resume=meme
      *
-     * take them directly back to the
-     * saved preview.
-     *
-     * DO NOT go to Profile.
+     * Dashboard then reads the actual meme
+     * from localStorage and reopens it.
      */
 
     if (
-        hasResumeMemeCookie(
-            request
-        )
+        shouldResumeMeme
     ) {
         return redirectNoStore(
             new URL(
@@ -459,13 +495,12 @@ export async function GET(
 
     /*
      * =====================================================
-     * NORMAL SIGNUP / LOGIN
+     * NORMAL LOGIN / SIGNUP
      * =====================================================
      *
-     * No onboarding wall.
-     * No forced profile editing.
+     * No forced Profile onboarding.
      *
-     * User lands directly inside Meme Lab.
+     * User immediately enters Meme Lab.
      */
 
     return redirectNoStore(
